@@ -46,7 +46,7 @@ func main() {
 	// showFlagExample()
 
 	// 1.1 打开工具之旅（子命令的实现）
-	showFlagSubCommand()
+	// showFlagSubCommand()
 
 	// 1.2 单词格式转换
 	err := cmd.Execute()
