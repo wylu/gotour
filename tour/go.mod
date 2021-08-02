@@ -2,4 +2,4 @@ module github.com/wylu/gotour/tour
 
 go 1.15
 
-require github.com/spf13/cobra v1.2.1 // indirect
+require github.com/spf13/cobra v1.2.1

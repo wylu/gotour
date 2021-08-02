@@ -1,9 +1,10 @@
 package cmd
 
 import (
-	"github.com/wylu/gotour/tour/internal/word"
 	"log"
 	"strings"
+
+	"github.com/wylu/gotour/tour/internal/word"
 
 	"github.com/spf13/cobra"
 )
