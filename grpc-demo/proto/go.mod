@@ -1,4 +1,4 @@
-module github.com/wylu/gotour/tour/grpc-demo/proto
+module github.com/wylu/gotour/grpc-demo/proto
 
 go 1.15
 

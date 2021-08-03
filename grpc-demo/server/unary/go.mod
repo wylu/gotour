@@ -1,4 +1,4 @@
-module github.com/wylu/gotour/tour/grpc-demo/server/unary
+module github.com/wylu/gotour/grpc-demo/server/unary
 
 go 1.15
 

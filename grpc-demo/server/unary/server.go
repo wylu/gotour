@@ -3,7 +3,7 @@ package main
 import (
 	"context"
 
-	pb "github.com/wylu/gotour/tour/grpc-demo/proto"
+	pb "github.com/wylu/gotour/grpc-demo/proto"
 )
 
 type GreeterServer struct{}
