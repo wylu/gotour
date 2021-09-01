@@ -5,7 +5,7 @@ import (
 	"log"
 	"os"
 
-	"github.com/wylu/gotour/tour/cmd"
+	"tour/cmd"
 )
 
 func showFlagExample() {
