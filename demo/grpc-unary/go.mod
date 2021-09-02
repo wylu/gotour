@@ -1,4 +1,4 @@
-module grpcunary
+module grpc-unary
 
 go 1.15
 

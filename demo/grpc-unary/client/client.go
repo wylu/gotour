@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"log"
 
-	pb "grpcunary/proto"
+	pb "grpc-unary/proto"
 
 	"google.golang.org/grpc"
 )
