@@ -343,3 +343,832 @@ $ go run main.go
 
 启动信息表示路由正常注册，你可以再去实际调用一下接口，看看返回是不是正常，这一节就大功告成了。
 
+# 2.3 编写公共组件
+
+刚想正式的开始编码，你会突然发现，怎么什么配套组件都没有，写起来一点都不顺手，没法形成闭环。
+
+实际上在我们每个公司的项目中，都会有一类组件，我们常称其为基础组件，又或是公共组件，它们是不带强业务属性的，串联着整个应用程序，一般由负责基建或第一批搭建的该项目的同事进行梳理和编写，如果没有这类组件，谁都写一套，是非常糟糕的，并且这个应用程序是无法形成闭环的。
+
+因此在这一章节我们将完成一个 Web 应用中最常用到的一些基础组件，保证应用程序的标准化，一共分为如下五个板块：
+
+![image](https://golang2.eddycjy.com/images/ch2/common-component.jpg)
+
+## 2.3.1 错误码标准化
+
+在应用程序的运行中，我们常常需要与客户端进行交互，而交互分别是两点，一个是正确响应下的结果集返回，另外一个是错误响应的错误码和消息体返回，用于告诉客户端，这一次请求发生了什么事，因为什么原因失败了。而在错误码的处理上，又延伸出一个新的问题，那就是错误码的标准化处理，不提前预判，将会造成比较大的麻烦，如下：
+
+![image](https://golang2.eddycjy.com/images/ch2/errcode.jpg)
+
+在上图中，我们可以看到客户端分别调用了三个不同的服务端，三个服务端 A、B、C，它们的响应结果的模式都不一样…如果不做任何挣扎的话，那客户端就需要知道它调用的是哪个服务，然后每一个服务写一种错误码处理规则，非常麻烦，那如果后面继续添加新的服务端，如果又不一样，那岂不是适配的更加多了？
+
+至少在大的层面来讲，我们要尽可能的保证每个项目前后端的交互语言规则是一致的，因此在一个新项目搭建之初，其中重要的一项预备工作，那就是标准化我们的错误码格式，保证客户端是“理解”我们的错误码规则，不需要每次都写一套新的。
+
+### 2.3.1.1 公共错误码
+
+我们需要在在项目目录下的 `pkg/errcode` 目录新建 common_code.go 文件，用于预定义项目中的一些公共错误码，便于引导和规范大家的使用，如下：
+
+```go
+var (
+	Success                   = NewError(0, "成功")
+	ServerError               = NewError(10000000, "服务内部错误")
+	InvalidParams             = NewError(10000001, "入参错误")
+	NotFound                  = NewError(10000002, "找不到")
+	UnauthorizedAuthNotExist  = NewError(10000003, "鉴权失败，找不到对应的 AppKey 和 AppSecret")
+	UnauthorizedTokenError    = NewError(10000004, "鉴权失败，Token 错误")
+	UnauthorizedTokenTimeout  = NewError(10000005, "鉴权失败，Token 超时")
+	UnauthorizedTokenGenerate = NewError(10000006, "鉴权失败，Token 生成失败")
+	TooManyRequests           = NewError(10000007, "请求过多")
+)
+```
+
+### 2.3.1.2 错误处理
+
+接下来我们在项目目录下的 `pkg/errcode` 目录新建 errcode.go 文件，编写常用的一些错误处理公共方法，标准化我们的错误输出，如下：
+
+```go
+type Error struct {
+	code int `json:"code"`
+	msg string `json:"msg"`
+	details []string `json:"details"`
+}
+
+var codes = map[int]string{}
+
+func NewError(code int, msg string) *Error {
+	if _, ok := codes[code]; ok {
+		panic(fmt.Sprintf("错误码 %d 已经存在，请更换一个", code))
+	}
+	codes[code] = msg
+	return &Error{code: code, msg: msg}
+}
+
+func (e *Error) Error() string {
+	return fmt.Sprintf("错误码：%d, 错误信息:：%s", e.Code(), e.Msg())
+}
+
+func (e *Error) Code() int {
+	return e.code
+}
+
+func (e *Error) Msg() string {
+	return e.msg
+}
+
+func (e *Error) Msgf(args []interface{}) string {
+	return fmt.Sprintf(e.msg, args...)
+}
+
+func (e *Error) Details() []string {
+	return e.details
+}
+
+func (e *Error) WithDetails(details ...string) *Error {
+	newError := *e
+	newError.details = []string{}
+	for _, d := range details {
+		newError.details = append(newError.details, d)
+	}
+
+	return &newError
+}
+
+func (e *Error) StatusCode() int {
+	switch e.Code() {
+	case Success.Code():
+		return http.StatusOK
+	case ServerError.Code():
+		return http.StatusInternalServerError
+	case InvalidParams.Code():
+		return http.StatusBadRequest
+	case UnauthorizedAuthNotExist.Code():
+		fallthrough
+	case UnauthorizedTokenError.Code():
+		fallthrough
+	case UnauthorizedTokenGenerate.Code():
+		fallthrough
+	case UnauthorizedTokenTimeout.Code():
+		return http.StatusUnauthorized
+	case TooManyRequests.Code():
+		return http.StatusTooManyRequests
+	}
+
+	return http.StatusInternalServerError
+}
+```
+
+在错误码方法的编写中，我们声明了 `Error` 结构体用于表示错误的响应结果，并利用 `codes` 作为全局错误码的存储载体，便于查看当前注册情况，并在调用 `NewError` 创建新的 `Error` 实例的同时进行排重的校验。
+
+另外相对特殊的是 `StatusCode` 方法，它主要用于针对一些特定错误码进行状态码的转换，因为不同的内部错误码在 HTTP 状态码中都代表着不同的意义，我们需要将其区分开来，便于客户端以及监控/报警等系统的识别和监听。
+
+## 2.3.2 配置管理
+
+在应用程序的运行生命周期中，最直接的关系之一就是应用的配置读取和更新。它的一举一动都有可能影响应用程序的改变，其分别包含如下行为：
+
+![image](https://golang2.eddycjy.com/images/ch2/config.jpg)
+
+- 在启动时：可以进行一些基础应用属性、连接第三方实例（MySQL、NoSQL）等等的初始化行为。
+- 在运行中：可以监听文件或其他存储载体的变更来实现热更新配置的效果，例如：在发现有变更的话，就对原有配置值进行修改，以此达到相关联的一个效果。如果更深入业务使用的话，我们还可以通过配置的热更新，达到功能灰度的效果，这也是一个比较常见的场景。
+
+另外，配置组件是会根据实际情况去选型的，一般大多为文件配置或配置中心的模式，在本次博客后端中我们的配置管理使用最常见的文件配置作为我们的选型。
+
+### 2.3.2.1 安装
+
+为了完成文件配置的读取，我们需要借助第三方开源库 viper，在项目根目录下执行以下安装命令：
+
+```shell
+$ go get -u github.com/spf13/viper@v1.4.0
+```
+
+Viper 是适用于 Go 应用程序的完整配置解决方案，是目前 Go 语言中比较流行的文件配置解决方案，它支持处理各种不同类型的配置需求和配置格式。
+
+### 2.3.2.2 配置文件
+
+在项目目录下的 `configs` 目录新建 config.yaml 文件，写入以下配置：
+
+```shell
+Server:
+  RunMode: debug
+  HttpPort: 8000
+  ReadTimeout: 60
+  WriteTimeout: 60
+App:
+  DefaultPageSize: 10
+  MaxPageSize: 100
+  LogSavePath: storage/logs
+  LogFileName: app
+  LogFileExt: .log
+Database:
+  DBType: mysql
+  Username: root  # 填写你的数据库账号
+  Password: rootroot  # 填写你的数据库密码
+  Host: 127.0.0.1:3306
+  DBName: blog_service
+  TablePrefix: blog_
+  Charset: utf8
+  ParseTime: True
+  MaxIdleConns: 10
+  MaxOpenConns: 30
+```
+
+在配置文件中，我们分别针对如下内容进行了默认配置：
+
+- Server：服务配置，设置 gin 的运行模式、默认的 HTTP 监听端口、允许读取和写入的最大持续时间。
+- App：应用配置，设置默认每页数量、所允许的最大每页数量以及默认的应用日志存储路径。
+- Database：数据库配置，主要是连接实例所必需的基础参数。
+
+### 2.3.2.3 编写组件
+
+在完成了配置文件的确定和编写后，我们需要针对读取配置的行为进行封装，便于应用程序的使用，我们在项目目录下的 `pkg/setting` 目录下新建 setting.go 文件，写入如下代码：
+
+```go
+type Setting struct {
+	vp *viper.Viper
+}
+
+func NewSetting() (*Setting, error) {
+	vp := viper.New()
+	vp.SetConfigName("config")
+	vp.AddConfigPath("configs/")
+	vp.SetConfigType("yaml")
+	err := vp.ReadInConfig()
+	if err != nil {
+		return nil, err
+	}
+
+	return &Setting{vp}, nil
+}
+```
+
+在这里我们编写了 `NewSetting` 方法，用于初始化本项目的配置的基础属性，设定配置文件的名称为 `config`，配置类型为 `yaml`，并且设置其配置路径为相对路径 `configs/`，以此确保在项目目录下执行运行时能够成功启动。
+
+另外 viper 是允许设置多个配置路径的，这样子可以尽可能的尝试解决路径查找的问题，也就是可以不断地调用 `AddConfigPath` 方法，这块在后续会再深入介绍。
+
+接下来我们新建 section.go 文件，用于声明配置属性的结构体并编写读取区段配置的配置方法，如下：
+
+```go
+type ServerSettingS struct {
+	RunMode      string
+	HttpPort     string
+	ReadTimeout  time.Duration
+	WriteTimeout time.Duration
+}
+
+type AppSettingS struct {
+	DefaultPageSize int
+	MaxPageSize     int
+	LogSavePath     string
+	LogFileName     string
+	LogFileExt      string
+}
+
+type DatabaseSettingS struct {
+	DBType       string
+	UserName     string
+	Password     string
+	Host         string
+	DBName       string
+	TablePrefix  string
+	Charset      string
+	ParseTime    bool
+	MaxIdleConns int
+	MaxOpenConns int
+}
+
+func (s *Setting) ReadSection(k string, v interface{}) error {
+	err := s.vp.UnmarshalKey(k, v)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+```
+
+### 2.3.2.4 包全局变量
+
+在读取了文件的配置信息后，还是不够的，因为我们需要将配置信息和应用程序关联起来，我们才能够去使用它，因此在项目目录下的 `global` 目录下新建 setting.go 文件，写入如下代码：
+
+```go
+var (
+	ServerSetting   *setting.ServerSettingS
+	AppSetting      *setting.AppSettingS
+	DatabaseSetting *setting.DatabaseSettingS
+)
+```
+
+我们针对最初预估的三个区段配置，进行了全局变量的声明，便于在接下来的步骤将其关联起来，并且提供给应用程序内部调用。
+
+另外全局变量的初始化，是会随着应用程序的不断演进不断改变的，因此并不是一成不变，也就是这里展示的并不一定是最终的结果。
+
+### 2.3.2.5 初始化配置读取
+
+在完成了所有的预备行为后，我们回到项目根目录下的 main.go 文件，修改代码如下：
+
+```go
+func init() {
+	err := setupSetting()
+	if err != nil {
+		log.Fatalf("init.setupSetting err: %v", err)
+	}
+}
+
+func main() {...}
+
+func setupSetting() error {
+	setting, err := setting.NewSetting()
+	if err != nil {
+		return err
+	}
+	err = setting.ReadSection("Server", &global.ServerSetting)
+	if err != nil {
+		return err
+	}
+	err = setting.ReadSection("App", &global.AppSetting)
+	if err != nil {
+		return err
+	}
+	err = setting.ReadSection("Database", &global.DatabaseSetting)
+	if err != nil {
+		return err
+	}
+
+	global.ServerSetting.ReadTimeout *= time.Second
+	global.ServerSetting.WriteTimeout *= time.Second
+	return nil
+}
+```
+
+我们新增了一个 `init` 方法，有的读者可能会疑惑它有什么作用，在 Go 语言中，`init` 方法常用于应用程序内的一些初始化操作，它在 `main` 方法之前自动执行，它的执行顺序是：全局变量初始化 =》init 方法 =》main 方法，但并不是建议滥用，因为如果 `init` 过多，你可能会迷失在各个库的 `init` 方法中，会非常麻烦。
+
+而在我们的应用程序中，该 `init` 方法主要作用是进行应用程序的初始化流程控制，整个应用代码里也只会有一个 `init` 方法，因此我们在这里调用了初始化配置的方法，达到配置文件内容映射到应用配置结构体的作用。
+
+### 2.3.2.7 修改服务端配置
+
+接下来我们只需要在启动文件 main.go 中把已经映射好的配置和 gin 的运行模式进行设置，这样的话，在程序重新启动时后就可以生效，如下：
+
+```go
+func main() {
+	gin.SetMode(global.ServerSetting.RunMode)
+	router := routers.NewRouter()
+	s := &http.Server{
+		Addr:           ":" + global.ServerSetting.HttpPort,
+		Handler:        router,
+		ReadTimeout:    global.ServerSetting.ReadTimeout,
+		WriteTimeout:   global.ServerSetting.WriteTimeout,
+		MaxHeaderBytes: 1 << 20,
+	}
+	s.ListenAndServe()
+}
+```
+
+### 2.3.2.8 验证
+
+在完成了配置相关的初始化后，我们需要校验配置是否真正的映射到配置结构体上了，我们一般可以通过断点或简单打日志的方式进行查看，最终配置的包全局变量的值应当要得出如下结果：
+
+```shell
+global.ServerSetting: &{RunMode:debug HttpPort:8000 ReadTimeout:1m0s WriteTimeout:1m0s}
+
+global.AppSetting: &{DefaultPageSize:10 MaxPageSize:100}
+
+global.DatabaseSetting: &{DBType:mysql User: Password:rootroot Host:127.0.0.1:3306 DBName:blog TablePrefix:blog_}
+```
+
+## 2.3.3 数据库连接
+
+### 2.3.3.1 安装
+
+我们在本项目中数据库相关的数据操作将使用第三方的开源库 gorm，它是目前 Go 语言中最流行的 ORM 库（从 Github Star 来看），同时它也是一个功能齐全且对开发人员友好的 ORM 库，目前在 Github 上相当的活跃，具有一定的保障，安装命令如下：
+
+```shell
+$ go get -u github.com/jinzhu/gorm@v1.9.12
+```
+
+另外在社区中，也有其它的声音，例如有认为不使用 ORM 库更好的，这类的比较本文暂不探讨，但若是想了解的话可以看看像 sqlx 这类 database/sql 的扩展库，也是一个不错的选择。
+
+### 2.3.3.2 编写组件
+
+我们打开项目目录 `internal/model` 下的 model.go 文件，新增 NewDBEngine 方法，如下：
+
+```go
+import (
+	...
+	"github.com/jinzhu/gorm"
+	_ "github.com/jinzhu/gorm/dialects/mysql"
+)
+
+type Model struct {...}
+
+func NewDBEngine(databaseSetting *setting.DatabaseSettingS) (*gorm.DB, error) {
+	db, err := gorm.Open(databaseSetting.DBType, fmt.Sprintf("%s:%s@tcp(%s)/%s?charset=%s&parseTime=%t&loc=Local",
+		databaseSetting.UserName,
+		databaseSetting.Password,
+		databaseSetting.Host,
+		databaseSetting.DBName,
+		databaseSetting.Charset,
+		databaseSetting.ParseTime,
+	))
+	if err != nil {
+		return nil, err
+	}
+	
+	if global.ServerSetting.RunMode == "debug" {
+		db.LogMode(true)
+	}
+	db.SingularTable(true)
+	db.DB().SetMaxIdleConns(databaseSetting.MaxIdleConns)
+	db.DB().SetMaxOpenConns(databaseSetting.MaxOpenConns)
+
+	return db, nil
+}
+```
+
+我们通过上述代码，编写了一个针对创建 DB 实例的 NewDBEngine 方法，同时增加了 gorm 开源库的引入和 MySQL 驱动库 `github.com/jinzhu/gorm/dialects/mysql` 的初始化（不同类型的 DBType 需要引入不同的驱动库，否则会存在问题）。
+
+### 2.3.3.3 包全局变量
+
+我们在项目目录下的 `global` 目录，新增 db.go 文件，新增如下内容：
+
+```go
+var (
+	DBEngine *gorm.DB
+)
+```
+
+### 2.3.3.4 初始化
+
+回到启动文件，也就是项目目录下的 main.go 文件，新增 setupDBEngine 方法初始化，如下：
+
+```go
+func init() {
+	...
+	err = setupDBEngine()
+	if err != nil {
+		log.Fatalf("init.setupDBEngine err: %v", err)
+	}
+}
+
+func main() {...}
+func setupSetting() error {...}
+func setupLogger() error {...}
+
+func setupDBEngine() error {
+	var err error
+	global.DBEngine, err = model.NewDBEngine(global.DatabaseSetting)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+```
+
+这里需要注意，有一些人会把初始化语句不小心写成：`global.DBEngine, err := model.NewDBEngine(global.DatabaseSetting)`，这是存在很大问题的，因为 `:=` 会重新声明并创建了左侧的新局部变量，因此在其它包中调用 `global.DBEngine` 变量时，它仍然是 `nil`，仍然是达不到可用标准，因为根本就没有赋值到真正需要赋值的包全局变量 `global.DBEngine` 上。
+
+## 2.3.4 日志写入
+
+如果有心的读者会发现我们在上述应用代码中都是直接使用 Go 标准库 log 来进行的日志输出，这其实是有些问题的，因为在一个项目中，我们的日志需要标准化的记录一些的公共信息，例如：代码调用堆栈、请求链路 ID、公共的业务属性字段等等，而直接输出标准库的日志的话，并不具备这些数据，也不够灵活。
+
+日志的信息的齐全与否在排查和调试问题中是非常重要的一环，因此在应用程序中我们也会有一个标准的日志组件会进行统一处理和输出。
+
+### 2.3.4.1 安装
+
+```shell
+$ go get -u gopkg.in/natefinch/lumberjack.v2
+```
+
+我们先拉取日志组件内要使用到的第三方的开源库 lumberjack，它的核心功能是将日志写入滚动文件中，该库支持设置所允许单日志文件的最大占用空间、最大生存周期、允许保留的最多旧文件数，如果出现超出设置项的情况，就会对日志文件进行滚动处理。
+
+而我们使用这个库，主要是为了减免一些文件操作类的代码编写，把核心逻辑摆在日志标准化处理上。
+
+### 2.3.4.2 编写组件
+
+首先在这一节中，实质上代码都是在同一个文件中的，但是为了便于理解，我们会在讲解上会将日志组件的代码切割为多块进行剖析。
+
+#### 2.3.4.2.1 日志分级
+
+我们在项目目录下的 `pkg/` 目录新建 `logger` 目录，并创建 logger.go 文件，写入日志分级相关的代码：
+
+```go
+type Level int8
+
+type Fields map[string]interface{}
+
+const (
+	LevelDebug Level = iota
+	LevelInfo
+	LevelWarn
+	LevelError
+	LevelFatal
+	LevelPanic
+)
+
+func (l Level) String() string {
+	switch l {
+	case LevelDebug:
+		return "debug"
+	case LevelInfo:
+		return "info"
+	case LevelWarn:
+		return "warn"
+	case LevelError:
+		return "error"
+	case LevelFatal:
+		return "fatal"
+	case LevelPanic:
+		return "panic"
+	}
+	return ""
+}
+```
+
+我们先预定义了应用日志的 Level 和 Fields 的具体类型，并且分为了 Debug、Info、Warn、Error、Fatal、Panic 六个日志等级，便于在不同的使用场景中记录不同级别的日志。
+
+#### 2.3.4.2.2 日志标准化
+
+我们完成了日志的分级方法后，开始编写具体的方法去进行日志的实例初始化和标准化参数绑定，继续写入如下代码：
+
+```go
+type Logger struct {
+	newLogger *log.Logger
+	ctx       context.Context
+	fields    Fields
+	callers   []string
+}
+
+func NewLogger(w io.Writer, prefix string, flag int) *Logger {
+	l := log.New(w, prefix, flag)
+	return &Logger{newLogger: l}
+}
+
+func (l *Logger) clone() *Logger {
+	nl := *l
+	return &nl
+}
+
+func (l *Logger) WithFields(f Fields) *Logger {
+	ll := l.clone()
+	if ll.fields == nil {
+		ll.fields = make(Fields)
+	}
+	for k, v := range f {
+		ll.fields[k] = v
+	}
+	return ll
+}
+
+func (l *Logger) WithContext(ctx context.Context) *Logger {
+	ll := l.clone()
+	ll.ctx = ctx
+	return ll
+}
+
+func (l *Logger) WithCaller(skip int) *Logger {
+	ll := l.clone()
+	pc, file, line, ok := runtime.Caller(skip)
+	if ok {
+		f := runtime.FuncForPC(pc)
+		ll.callers = []string{fmt.Sprintf("%s: %d %s", file, line, f.Name())}
+	}
+
+	return ll
+}
+
+func (l *Logger) WithCallersFrames() *Logger {
+	maxCallerDepth := 25
+	minCallerDepth := 1
+	callers := []string{}
+	pcs := make([]uintptr, maxCallerDepth)
+	depth := runtime.Callers(minCallerDepth, pcs)
+	frames := runtime.CallersFrames(pcs[:depth])
+	for frame, more := frames.Next(); more; frame, more = frames.Next() {
+		callers = append(callers, fmt.Sprintf("%s: %d %s", frame.File, frame.Line, frame.Function))
+		if !more {
+			break
+		}
+	}
+	ll := l.clone()
+	ll.callers = callers
+	return ll
+}
+```
+
+- WithLevel：设置日志等级。
+- WithFields：设置日志公共字段。
+- WithContext：设置日志上下文属性。
+- WithCaller：设置当前某一层调用栈的信息（程序计数器、文件信息、行号）。
+- WithCallersFrames：设置当前的整个调用栈信息。
+
+#### 2.3.4.2.3 日志格式化和输出
+
+我们开始编写日志内容的格式化和日志输出动作的相关方法，继续写入如下代码：
+
+```go
+func (l *Logger) JSONFormat(level Level, message string) map[string]interface{} {
+	data := make(Fields, len(l.fields)+4)
+	data["level"] = level.String()
+	data["time"] = time.Now().Local().UnixNano()
+	data["message"] = message
+	data["callers"] = l.callers
+	if len(l.fields) > 0 {
+		for k, v := range l.fields {
+			if _, ok := data[k]; !ok {
+				data[k] = v
+			}
+		}
+	}
+
+	return data
+}
+
+func (l *Logger) Output(level Level, message string) {
+	body, _ := json.Marshal(l.JSONFormat(level, message))
+	content := string(body)
+	switch level {
+	case LevelDebug:
+		l.newLogger.Print(content)
+	case LevelInfo:
+		l.newLogger.Print(content)
+	case LevelWarn:
+		l.newLogger.Print(content)
+	case LevelError:
+		l.newLogger.Print(content)
+	case LevelFatal:
+		l.newLogger.Fatal(content)
+	case LevelPanic:
+		l.newLogger.Panic(content)
+	}
+}
+```
+
+#### 2.3.4.2.4 日志分级输出
+
+我们根据先前定义的日志分级，编写对应的日志输出的外部方法，继续写入如下代码：
+
+```go
+func (l *Logger) Info(v ...interface{}) {
+	l.Output(LevelInfo, fmt.Sprint(v...))
+}
+
+func (l *Logger) Infof(format string, v ...interface{}) {
+	l.Output(LevelInfo, fmt.Sprintf(format, v...))
+}
+
+func (l *Logger) Fatal(v ...interface{}) {
+	l.Output(LevelFatal, fmt.Sprint(v...))
+}
+
+func (l *Logger) Fatalf(format string, v ...interface{}) {
+	l.Output(LevelFatal, fmt.Sprintf(format, v...))
+}
+...
+```
+
+上述代码中仅展示了 Info、Fatal 级别的日志方法，这里主要是根据 Debug、Info、Warn、Error、Fatal、Panic 六个日志等级编写对应的方法，大家可自行完善，除了方法名以及 WithLevel 设置的不一样，其他均为一致的代码。
+
+### 2.3.4.3 包全局变量
+
+在完成日志库的编写后，我们需要定义一个 Logger 对象便于我们的应用程序使用。因此我们打开项目目录下的 `global/setting.go` 文件，新增如下内容：
+
+```go
+var (
+	...
+	Logger          *logger.Logger
+)
+```
+
+我们在包全局变量中新增了 Logger 对象，用于日志组件的初始化。
+
+### 2.3.4.4 初始化
+
+接下来我们需要修改启动文件，也就是项目目录下的 main.go 文件，新增对刚刚定义的 Logger 对象的初始化，如下：
+
+```go
+func init() {
+	err := setupSetting()
+	if err != nil {
+		log.Fatalf("init.setupSetting err: %v", err)
+	}
+	err = setupLogger()
+	if err != nil {
+		log.Fatalf("init.setupLogger err: %v", err)
+	}
+}
+
+func main() {...}
+func setupSetting() error {...}
+
+func setupLogger() error {
+	global.Logger = logger.NewLogger(&lumberjack.Logger{
+		Filename: global.AppSetting.LogSavePath + "/" + global.AppSetting.LogFileName + global.AppSetting.LogFileExt,
+		MaxSize:   600,
+		MaxAge:    10,
+		LocalTime: true,
+	}, "", log.LstdFlags).WithCaller(2)
+
+	return nil
+}
+```
+
+通过这段程序，我们在 init 方法中新增了日志组件的流程，并在 setupLogger 方法内部对 global 的包全局变量 Logger 进行了初始化，需要注意的是我们使用了 lumberjack 作为日志库的 io.Writer，并且设置日志文件所允许的最大占用空间为 600MB、日志文件最大生存周期为 10 天，并且设置日志文件名的时间格式为本地时间。
+
+### 2.3.4.5 验证
+
+在完成了上述的步骤后，日志组件已经正式的初始化完毕了，为了验证你是否操作正确，你可以在 main 方法中执行下述测试代码：
+
+```shell
+global.Logger.Infof("%s: go-programming-tour-book/%s", "eddycjy", "blog-service")
+```
+
+接着可以查看项目目录下的 `storage/logs/app.log`，看看日志文件是否正常创建且写入了预期的日志记录，大致如下：
+
+```shell
+{"callers":["~/go-programming-tour-book/blog-service/main.go: 20 main.init.0"],"level":"info","message":"eddycjy: go-programming-tour-book/blog-service","time":xxxx}
+```
+
+## 2.3.5 响应处理
+
+在应用程序中，与客户端对接的常常是服务端的接口，那客户端是怎么知道这一次的接口调用结果是怎么样的呢？一般来讲，主要是通过对返回的 HTTP 状态码和接口返回的响应结果进行判断，而判断的依据则是事先按规范定义好的响应结果。
+
+因此在这一小节，我们将编写统一处理接口返回的响应处理方法，它也正正与错误码标准化是相对应的。
+
+### 2.3.5.1 类型转换
+
+在项目目录下的 `pkg/convert` 目录下新建 convert.go 文件，如下：
+
+```go
+type StrTo string
+
+func (s StrTo) String() string {
+	return string(s)
+}
+
+func (s StrTo) Int() (int, error) {
+	v, err := strconv.Atoi(s.String())
+	return v, err
+}
+
+func (s StrTo) MustInt() int {
+	v, _ := s.Int()
+	return v
+}
+
+func (s StrTo) UInt32() (uint32, error) {
+	v, err := strconv.Atoi(s.String())
+	return uint32(v), err
+}
+
+func (s StrTo) MustUInt32() uint32 {
+	v, _ := s.UInt32()
+	return v
+}
+```
+
+### 2.3.5.2 分页处理
+
+在项目目录下的 `pkg/app` 目录下新建 pagination.go 文件，如下：
+
+```go
+func GetPage(c *gin.Context) int {
+	page := convert.StrTo(c.Query("page")).MustInt()
+	if page <= 0 {
+		return 1
+	}
+
+	return page
+}
+
+func GetPageSize(c *gin.Context) int {
+	pageSize := convert.StrTo(c.Query("page_size")).MustInt()
+	if pageSize <= 0 {
+		return global.AppSetting.DefaultPageSize
+	}
+	if pageSize > global.AppSetting.MaxPageSize {
+		return global.AppSetting.MaxPageSize
+	}
+
+	return pageSize
+}
+
+func GetPageOffset(page, pageSize int) int {
+	result := 0
+	if page > 0 {
+		result = (page - 1) * pageSize
+	}
+
+	return result
+}
+```
+
+### 2.3.5.3 响应处理
+
+在项目目录下的 `pkg/app` 目录下新建 app.go 文件，如下：
+
+```go
+type Response struct {
+	Ctx *gin.Context
+}
+
+type Pager struct {
+	Page int `json:"page"`
+	PageSize int `json:"page_size"`
+	TotalRows int `json:"total_rows"`
+}
+
+func NewResponse(ctx *gin.Context) *Response {
+	return &Response{Ctx: ctx}
+}
+
+func (r *Response) ToResponse(data interface{}) {
+	if data == nil {
+		data = gin.H{}
+	}
+	r.Ctx.JSON(http.StatusOK, data)
+}
+
+func (r *Response) ToResponseList(list interface{}, totalRows int) {
+	r.Ctx.JSON(http.StatusOK, gin.H{
+		"list": list,
+		"pager": Pager{
+			Page:      GetPage(r.Ctx),
+			PageSize:  GetPageSize(r.Ctx),
+			TotalRows: totalRows,
+		},
+	})
+}
+
+func (r *Response) ToErrorResponse(err *errcode.Error) {
+	response := gin.H{"code": err.Code(), "msg": err.Msg()}
+	details := err.Details()
+	if len(details) > 0 {
+		response["details"] = details
+	}
+
+	r.Ctx.JSON(err.StatusCode(), response)
+}
+```
+
+### 2.3.5.4 验证
+
+我们可以找到其中一个接口方法，调用对应的方法，检查是否有误，如下：
+
+```go
+func (a Article) Get(c *gin.Context) {
+	app.NewResponse(c).ToErrorResponse(errcode.ServerError)
+	return
+}
+```
+
+验证响应结果，如下：
+
+```shell
+$ curl -v http://127.0.0.1:8080/api/v1/articles/1
+...
+< HTTP/1.1 500 Internal Server Error
+{"code":10000000,"msg":"服务内部错误"}
+```
+
+从响应结果上看，可以知道本次接口的调用结果的 HTTP 状态码为 500，响应消息体为约定的错误体，符合我们的要求。
+
+## 2.3.6 小结
+
+在本章节中，我们主要是针对项目的公共组件初始化，做了大量的规范制定、公共库编写、初始化注册等等行为，虽然比较繁琐，这这些公共组件在整个项目运行中至关重要，早期做的越标准化，后期越省心省事，因为大家直接使用就可以了，不需要过多的关心细节，也不会有人重新再造新的公共库轮子，导致要适配多套。
