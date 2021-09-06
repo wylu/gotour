@@ -2,6 +2,7 @@ package main
 
 import (
 	"blog-service/global"
+	"blog-service/internal/model"
 	"blog-service/internal/routers"
 	"blog-service/pkg/setting"
 	"fmt"
@@ -16,6 +17,11 @@ func init() {
 	err := setupSetting()
 	if err != nil {
 		log.Fatalf("init.setupSetting err: %v\n", err)
+	}
+
+	err = setupDBEngine()
+	if err != nil {
+		log.Fatalf("init.setupDBEngine err: %v\n", err)
 	}
 }
 
@@ -59,4 +65,10 @@ func setupSetting() error {
 	global.ServerSetting.ReadTimeout *= time.Second
 	global.ServerSetting.WriteTimeout *= time.Second
 	return nil
+}
+
+func setupDBEngine() error {
+	var err error
+	global.DBEngine, err = model.NewDBEngine(global.DatabaseSetting)
+	return err
 }
