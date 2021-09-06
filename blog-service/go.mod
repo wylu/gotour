@@ -26,5 +26,6 @@ require (
 	golang.org/x/text v0.3.7
 	google.golang.org/genproto v0.0.0-20180817151627-c66870c02cf8
 	google.golang.org/protobuf v1.27.1 // indirect
+	gopkg.in/natefinch/lumberjack.v2 v2.0.0
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 )
