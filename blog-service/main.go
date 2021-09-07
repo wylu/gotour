@@ -31,6 +31,10 @@ func init() {
 	}
 }
 
+// @title blog-service
+// @version 1.0
+// @description Go 语言编程之旅：一起用 Go 做项目
+// @termsOfService https://github.com/go-programming-tour-book
 func main() {
 	// fmt.Printf("server: %v\n", global.ServerSetting)
 	global.Logger.Infof("server: %v\n", global.ServerSetting)

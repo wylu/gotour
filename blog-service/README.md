@@ -1172,3 +1172,324 @@ $ curl -v http://127.0.0.1:8080/api/v1/articles/1
 ## 2.3.6 小结
 
 在本章节中，我们主要是针对项目的公共组件初始化，做了大量的规范制定、公共库编写、初始化注册等等行为，虽然比较繁琐，这这些公共组件在整个项目运行中至关重要，早期做的越标准化，后期越省心省事，因为大家直接使用就可以了，不需要过多的关心细节，也不会有人重新再造新的公共库轮子，导致要适配多套。
+
+# 2.4 生成接口文档
+
+我们在前面的章节中完成了针对业务需求的模块和路由的设计，并且完成了公共组件的处理，初步运行也没有问题，那么这一次是不是真的就可以开始编码了呢？
+
+其实不然，虽然我们完成了路由的设计，但是接口的定义不是一个人的事，我们在提前设计好接口的入参、出参以及异常情况后，还需要其他同事一起进行接口设计评审，以便确认本次迭代的接口设计方案是尽可能正确和共同认可的，如下图：
+
+![image](https://golang2.eddycjy.com/images/ch2/api-design.jpg)
+
+## 2.4.1 什么是 Swagger
+
+那如何维护接口文档，是绝大部分开发人员都经历过的问题，因为前端、后端、测试开发等等人员都要看，每个人都给一份的话，怎么维护，这将是一个非常头大的问题。在很多年以前，也流行过用 Word 等等工具写接口文档，显然，这会有许许多多的问题，后端人员所耗费的精力、文档的时效性根本无法得到保障。
+
+针对这类问题，市面上出现了大量的解决方案，Swagger 正是其中的佼佼者，它更加的全面和完善，具有相关联的生态圈。它是基于标准的 OpenAPI 规范进行设计的，只要照着这套规范去编写你的注解或通过扫描代码去生成注解，就能生成统一标准的接口文档和一系列 Swagger 工具。
+
+## 2.4.2 OpenAPI & Swagger
+
+在上文我们有提到 OpenAPI，你可能会对此产生疑惑，OpenAPI 和 Swagger 又是什么关系？
+
+其实 OpenAPI 规范是在 2015 年由 OpenAPI Initiative 捐赠给 Linux 基金会的，并且 Swagger 对此更进一步的针对 OpenAPI 规范提供了大量与之相匹配的工具集，能够充分利用 OpenAPI 规范去映射生成所有与之关联的资源和操作去查看和调用 RESTful 接口，因此我们也常说 Swagger 不仅是一个“规范”，更是一个框架。
+
+从功能使用上来讲，OpenAPI 规范能够帮助我们描述一个 API 的基本信息，比如：
+
+- 有关该 API 的描述。
+- 可用路径（/资源）。
+- 在每个路径上的可用操作（获取/提交…）。
+- 每个操作的输入/输出格式。
+
+## 2.4.3 安装 Swagger
+
+Swagger 相关的工具集会根据 OpenAPI 规范去生成各式各类的与接口相关联的内容，常见的流程是编写注解 =》调用生成库-》生成标准描述文件 =》生成/导入到对应的 Swagger 工具。
+
+因此接下来第一步，我们要先安装 Go 对应的开源 Swagger 相关联的库，在项目 blog-service 根目录下执行安装命令，如下：
+
+```shell
+$ go get -u github.com/swaggo/swag/cmd/swag@v1.6.5
+$ go get -u github.com/swaggo/gin-swagger@v1.2.0 
+$ go get -u github.com/swaggo/files
+$ go get -u github.com/alecthomas/template
+```
+
+验证是否安装成功，如下：
+
+```shell
+$ swag -v
+swag version v1.6.5
+```
+
+如果命令行提示寻找不到 swag 文件，可以检查一下对应的 bin 目录是否已经加入到环境变量 PATH 中。
+
+## 2.4.4 写入注解
+
+在完成了 Swagger 关联库的安装后，我们需要针对项目里的 API 接口进行注解的编写，以便于后续在进行生成时能够正确的运行，接下来我们将使用到如下注解：
+
+| 注解     | 描述                                                         |
+| -------- | ------------------------------------------------------------ |
+| @Summary | 摘要                                                         |
+| @Produce | API 可以产生的 MIME 类型的列表，MIME 类型你可以简单的理解为响应类型，例如：json、xml、html 等等 |
+| @Param   | 参数格式，从左到右分别为：参数名、入参类型、数据类型、是否必填、注释 |
+| @Success | 响应成功，从左到右分别为：状态码、参数类型、数据类型、注释   |
+| @Failure | 响应失败，从左到右分别为：状态码、参数类型、数据类型、注释   |
+| @Router  | 路由，从左到右分别为：路由地址，HTTP 方法                    |
+
+### 2.4.4.1 API
+
+我们切换到项目目录下的 `internal/routers/api/v1` 目录，打开 tag.go 文件，写入如下注解：
+
+```go
+// @Summary 获取多个标签
+// @Produce  json
+// @Param name query string false "标签名称" maxlength(100)
+// @Param state query int false "状态" Enums(0, 1) default(1)
+// @Param page query int false "页码"
+// @Param page_size query int false "每页数量"
+// @Success 200 {object} model.Tag "成功"
+// @Failure 400 {object} errcode.Error "请求错误"
+// @Failure 500 {object} errcode.Error "内部错误"
+// @Router /api/v1/tags [get]
+func (t Tag) List(c *gin.Context) {}
+
+// @Summary 新增标签
+// @Produce  json
+// @Param name body string true "标签名称" minlength(3) maxlength(100)
+// @Param state body int false "状态" Enums(0, 1) default(1)
+// @Param created_by body string true "创建者" minlength(3) maxlength(100)
+// @Success 200 {object} model.Tag "成功"
+// @Failure 400 {object} errcode.Error "请求错误"
+// @Failure 500 {object} errcode.Error "内部错误"
+// @Router /api/v1/tags [post]
+func (t Tag) Create(c *gin.Context) {}
+
+// @Summary 更新标签
+// @Produce  json
+// @Param id path int true "标签 ID"
+// @Param name body string false "标签名称" minlength(3) maxlength(100)
+// @Param state body int false "状态" Enums(0, 1) default(1)
+// @Param modified_by body string true "修改者" minlength(3) maxlength(100)
+// @Success 200 {array} model.Tag "成功"
+// @Failure 400 {object} errcode.Error "请求错误"
+// @Failure 500 {object} errcode.Error "内部错误"
+// @Router /api/v1/tags/{id} [put]
+func (t Tag) Update(c *gin.Context) {}
+
+// @Summary 删除标签
+// @Produce  json
+// @Param id path int true "标签 ID"
+// @Success 200 {string} string "成功"
+// @Failure 400 {object} errcode.Error "请求错误"
+// @Failure 500 {object} errcode.Error "内部错误"
+// @Router /api/v1/tags/{id} [delete]
+func (t Tag) Delete(c *gin.Context) {}
+```
+
+在这里我们只展示了标签模块的接口注解编写，接下来你应当按照注解的含义和参考上述接口注解，完成文章模块接口注解的编写。
+
+### 2.4.4.2 Main
+
+那么接口方法本身有了注解，那针对这个项目，能不能写注解呢，万一有很多个项目，怎么知道它是谁？实际上是可以识别出来的，我们只要针对 main 方法写入如下注解：
+
+```go
+// @title 博客系统
+// @version 1.0
+// @description Go 语言编程之旅：一起用 Go 做项目
+// @termsOfService https://github.com/go-programming-tour-book
+func main() {
+	...
+}
+```
+
+## 2.4.5 生成
+
+在完成了所有的注解编写后，我们回到项目根目录下，执行如下命令：
+
+```shell
+$ swag init
+```
+
+在执行命令完毕后，会发现在 docs 文件夹生成 docs.go、swagger.json、swagger.yaml 三个文件。
+
+## 2.4.6 路由
+
+那注解编写完，也通过 swag init 把 Swagger API 所需要的文件都生成了，那接下来我们怎么访问接口文档呢？其实很简单，我们只需要在 routers 中进行默认初始化和注册对应的路由就可以了，打开项目目录下的 `internal/routers` 目录中的 router.go 文件，新增代码如下：
+
+```go
+import (
+	...
+	_ "github.com/go-programming-tour-book/blog-service/docs"
+	ginSwagger "github.com/swaggo/gin-swagger"
+	"github.com/swaggo/gin-swagger/swaggerFiles"
+)
+
+func NewRouter() *gin.Engine {
+	r := gin.New()
+	r.Use(gin.Logger())
+	r.Use(gin.Recovery())
+	r.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
+	...
+	return r
+}
+```
+
+从表面上来看，主要做了两件事，分别是初始化 docs 包和注册一个针对 swagger 的路由，而在初始化 docs 包后，其 swagger.json 将会默认指向当前应用所启动的域名下的 swagger/doc.json 路径，如果有额外需求，可进行手动指定，如下：
+
+```go
+  url := ginSwagger.URL("http://127.0.0.1:8000/swagger/doc.json")
+  r.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler, url))
+```
+
+## 2.4.7 查看接口文档
+
+![image](https://golang2.eddycjy.com/images/ch2/api-doc.jpg)
+
+在完成了上述的设置后，我们重新启动服务端，在浏览器中访问 Swagger 的地址 `http://127.0.0.1:8000/swagger/index.html`，就可以看到上述图片中的 Swagger 文档展示，其主要分为三个部分，分别是项目主体信息、接口路由信息、模型信息，这三部分共同组成了我们主体内容。
+
+## 2.4.8 发生了什么
+
+可能会疑惑，我明明只是初始化了个 docs 包并注册了一个 Swagger 相关路由，Swagger 的文档是怎么关联上的呢，我在接口上写的注解又到哪里去了？
+
+其实主体是与我们在章节 2.4.4 生成的文件有关的，分别是：
+
+```shell
+docs
+├── docs.go
+├── swagger.json
+└── swagger.yaml
+```
+
+### 2.4.8.1 初始化 docs
+
+在第一步中，我们初始化了 docs 包，对应的其实就是 docs.go 文件，因为目录下仅有一个 go 源文件，其源码如下：
+
+```go
+var doc = `{
+    "schemes": {{ marshal .Schemes }},
+    "swagger": "2.0",
+    "info": {
+        "description": "{{.Description}}",
+        "title": "{{.Title}}",
+        "termsOfService": "https://github.com/go-programming-tour-book",
+        "version": "{{.Version}}"
+    },
+    ...
+}`
+
+var SwaggerInfo = swaggerInfo{
+	Version:     "1.0",
+	Title:       "博客系统",
+	Description: "Go 语言编程之旅：一起用 Go 做项目",
+	...
+}
+
+func (s *s) ReadDoc() string {
+	sInfo := SwaggerInfo
+	sInfo.Description = strings.Replace(sInfo.Description, "\n", "\\n", -1)
+	t, _ := template.New("swagger_info").Funcs(template.FuncMap{...}).Parse(doc)
+	
+	var tpl bytes.Buffer
+	_ = t.Execute(&tpl, sInfo)
+	return tpl.String()
+}
+
+func init() {
+	swag.Register(swag.Name, &s{})
+}
+```
+
+通过对源码的分析，我们可以得知实质上在初始化 docs 包时，会默认执行 init 方法，而在 init 方法中，会注册相关方法，主体逻辑是 swag 会在生成时去检索项目下的注解信息，然后将项目信息和接口路由信息按规范生成到包全局变量 doc 中去。
+
+紧接着会在 ReadDoc 方法中做一些 template 的模板映射等工作，完善 doc 的输出。
+
+### 2.4.8.2 注册路由
+
+在上一步中，我们知道了生成的注解数据源在哪，但是它们两者又是怎么关联起来的呢，实际上与我们调用的 `ginSwagger.WrapHandler(swaggerFiles.Handler)` 有关，如下：
+
+```go
+func WrapHandler(h *webdav.Handler, confs ...func(c *Config)) gin.HandlerFunc {
+	defaultConfig := &Config{URL: "doc.json"}
+	...
+	return CustomWrapHandler(defaultConfig, h)
+}
+```
+
+实际上在调用 WrapHandler 后，swag 内部会将其默认调用的 URL 设置为 doc.json，但你可能会纠结，明明我们生成的文件里没有 doc.json，这又是从哪里来的，我们接着往下看，如下：
+
+```go
+func CustomWrapHandler(config *Config, h *webdav.Handler) gin.HandlerFunc {
+	  ...
+		switch path {
+		case "index.html":
+			index.Execute(c.Writer, &swaggerUIBundle{
+				URL: config.URL,
+			})
+		case "doc.json":
+			doc, err := swag.ReadDoc()
+			if err != nil {
+				panic(err)
+			}
+			c.Writer.Write([]byte(doc))
+			return
+		default:
+			h.ServeHTTP(c.Writer, c.Request)
+		}
+	}
+}
+```
+
+在 CustomWrapHandler 方法中，我们可以发现一处比较经典 switch case 的逻辑。
+
+在第一个 case 中，处理是的 index.html，这又是什么呢，其实你可以回顾一下，我们在先前是通过 `http://127.0.0.1:8000/swagger/index.html` 访问到 Swagger 文档的，对应的便是这里的逻辑。
+
+在第二个 case 中，就可以大致解释我们所关注的 doc.json 到底是什么，它相当于一个内部标识，会去读取我们所生成的 Swagger 注解，你也可以发现我们先前在访问的 Swagger 文档时，它顶部的文本框中 Explore 默认的就是 doc.json（也可以填写外部地址，只要输出的是对应的 Swagger 注解）。
+
+## 2.4.9 问题
+
+细心的读者可能会发现，我们先前在公共组件的章节已经定义好了一些基本类型的 Response 返回值，但我们在本章节编写成功响应时，是直接调用 model 作为其数据类型，如下：
+
+```shell
+// @Success 200 {object} model.Tag "成功"
+```
+
+这样写的话，就会有一个问题，如果有 model.Tag 以外的字段，例如分页，那就无法展示了。更接近实践来讲，大家在编码中常常会遇到某个对象内中的某一个字段是 interface，这个字段的类型它是不定的，也就是公共结构体，那注解又应该怎么写呢，如下情况：
+
+```go
+type Test struct {
+	UserName string
+	Content  interface{}
+}
+```
+
+可能会有的人会忽略它，采取口头说明，但这显然是不完备的。而 swag 目前在 v1.6.3 也没有特别好的新注解方式，官方在 issue 里也曾表示过通过注解来解决这个问题是不合理的，那我们要怎么做呢？
+
+实际上，官方给出的建议很简单，就是定义一个针对 Swagger 的对象，专门用于 Swagger 接口文档展示，我们在 `internal/model` 的 tag.go 和 article.go 文件中，新增如下代码：
+
+```go
+// tag.go
+type TagSwagger struct {
+	List  []*Tag
+	Pager *app.Pager
+}
+
+// article.go
+type ArticleSwagger struct {
+	List  []*Article
+	Pager *app.Pager
+}
+```
+
+我们修改接口方法中对应的注解信息，如下：
+
+```shell
+// @Success 200 {object} model.TagSwagger "成功"
+```
+
+接下来你只需要在项目根目录下再次执行 swag init，并在生成成功后再重新启动服务端，就可以查看到最新的效果了，如下：
+
+![image](https://golang2.eddycjy.com/images/ch2/api-desc.jpg)
+
+## 2.4.10 小结
+
+在本章节中，我们简单介绍了 Swagger 和 Swagger 的相关生态圈组件，对所编写的 API 原型新增了响应的 Swagger 注解，在接下来中安装了针对 Go 语言的 Swagger 工具，用于后续的 Swagger 文档生成和使用。
+
