@@ -1493,3 +1493,296 @@ type ArticleSwagger struct {
 
 在本章节中，我们简单介绍了 Swagger 和 Swagger 的相关生态圈组件，对所编写的 API 原型新增了响应的 Swagger 注解，在接下来中安装了针对 Go 语言的 Swagger 工具，用于后续的 Swagger 文档生成和使用。
 
+# 2.5 为接口做参数校验
+
+接下来我们将正式进行编码，在进行对应的业务模块开发时，第一步要考虑到的问题的就是如何进行入参校验，我们需要将整个项目，甚至整个团队的组件给定下来，形成一个通用规范，在今天本章节将核心介绍这一块，并完成标签模块的接口的入参校验。
+
+## 2.5.1 validator 介绍
+
+在本项目中我们将使用开源项目 [**go-playground/validator**](https://github.com/go-playground/validator) 作为我们的本项目的基础库，它是一个基于标签来对结构体和字段进行值验证的一个验证器。
+
+那么，我们要单独引入这个库吗，其实不然，因为我们使用的 gin 框架，其内部的模型绑定和验证默认使用的是 [**go-playground/validator**](https://github.com/go-playground/validator) 来进行参数绑定和校验，使用起来非常方便。
+
+在项目根目录下执行命令，进行安装：
+
+```shell
+$ go get -u github.com/go-playground/validator/v10
+```
+
+## 2.5.2 业务接口校验
+
+接下来我们将正式开始对接口的入参进行校验规则的编写，也就是将校验规则写在对应的结构体的字段标签上，常见的标签含义如下：
+
+| 标签     | 含义                      |
+| -------- | ------------------------- |
+| required | 必填                      |
+| gt       | 大于                      |
+| gte      | 大于等于                  |
+| lt       | 小于                      |
+| lte      | 小于等于                  |
+| min      | 最小值                    |
+| max      | 最大值                    |
+| oneof    | 参数集内的其中之一        |
+| len      | 长度要求与 len 给定的一致 |
+
+### 2.5.2.1 标签接口
+
+我们回到项目的 `internal/service` 目录下的 tag.go 文件，针对入参校验增加绑定/验证结构体，在路由方法前写入如下代码：
+
+```go
+type CountTagRequest struct {
+	Name  string `form:"name" binding:"max=100"`
+	State uint8 `form:"state,default=1" binding:"oneof=0 1"`
+}
+
+type TagListRequest struct {
+	Name  string `form:"name" binding:"max=100"`
+	State uint8  `form:"state,default=1" binding:"oneof=0 1"`
+}
+
+type CreateTagRequest struct {
+	Name      string `form:"name" binding:"required,min=3,max=100"`
+	CreatedBy string `form:"created_by" binding:"required,min=3,max=100"`
+	State     uint8  `form:"state,default=1" binding:"oneof=0 1"`
+}
+
+type UpdateTagRequest struct {
+	ID         uint32 `form:"id" binding:"required,gte=1"`
+	Name       string `form:"name" binding:"min=3,max=100"`
+	State      uint8  `form:"state" binding:"required,oneof=0 1"`
+	ModifiedBy string `form:"modified_by" binding:"required,min=3,max=100"`
+}
+
+type DeleteTagRequest struct {
+	ID uint32 `form:"id" binding:"required,gte=1"`
+}
+```
+
+在上述代码中，我们主要针对业务接口中定义的的增删改查和统计行为进行了 Request 结构体编写，而在结构体中，应用到了两个 tag 标签，分别是 form 和 binding，它们分别代表着表单的映射字段名和入参校验的规则内容，其主要功能是实现参数绑定和参数检验。
+
+### 2.5.2.2 文章接口
+
+接下来到项目的 `internal/service` 目录下的 article.go 文件，针对入参校验增加绑定/验证结构体。这块与标签模块的验证规则差不多，主要是必填，长度最小、最大的限制，以及要求参数值必须在某个集合内的其中之一，因此不再赘述。
+
+## 2.5.3 国际化处理
+
+### 2.5.3.1 编写中间件
+
+go-playground/validator 默认的错误信息是英文，但我们的错误信息不一定是用的英文，有可能要简体中文，做国际化的又有其它的需求，这可怎么办，在通用需求的情况下，有没有简单又省事的办法解决呢？
+
+如果是简单的国际化需求，我们可以通过中间件配合语言包的方式去实现这个功能，接下来我们在项目的 `internal/middleware` 目录下新建 translations.go 文件，用于编写针对 validator 的语言包翻译的相关功能，新增如下代码：
+
+```go
+import (
+	"github.com/gin-gonic/gin"
+	"github.com/gin-gonic/gin/binding"
+	"github.com/go-playground/locales/en"
+	"github.com/go-playground/locales/zh"
+	"github.com/go-playground/locales/zh_Hant_TW"
+	"github.com/go-playground/universal-translator"
+	validator "github.com/go-playground/validator/v10"
+	en_translations "github.com/go-playground/validator/v10/translations/en"
+	zh_translations "github.com/go-playground/validator/v10/translations/zh"
+)
+
+func Translations() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		uni := ut.New(en.New(), zh.New(), zh_Hant_TW.New())
+		locale := c.GetHeader("locale")
+		trans, _ := uni.GetTranslator(locale)
+		v, ok := binding.Validator.Engine().(*validator.Validate)
+		if ok {
+			switch locale {
+			case "zh":
+				_ = zh_translations.RegisterDefaultTranslations(v, trans)
+				break
+			case "en":
+				_ = en_translations.RegisterDefaultTranslations(v, trans)
+				break
+			default:
+				_ = zh_translations.RegisterDefaultTranslations(v, trans)
+				break
+			}
+			c.Set("trans", trans)
+		}
+
+		c.Next()
+	}
+}
+```
+
+在自定义中间件 Translations 中，我们针对 i18n 利用了第三方开源库去实现这块功能，分别如下：
+
+- go-playground/locales：多语言包，是从 CLDR 项目（Unicode 通用语言环境数据存储库）生成的一组多语言环境，主要在 i18n 软件包中使用，该库是与 universal-translator 配套使用的。
+- go-playground/universal-translator：通用翻译器，是一个使用 CLDR 数据 + 复数规则的 Go 语言 i18n 转换器。
+- go-playground/validator/v10/translations：validator 的翻译器。
+
+而在识别当前请求的语言类别上，我们通过 GetHeader 方法去获取约定的 header 参数 locale，用于判别当前请求的语言类别是 en 又或是 zh，如果有其它语言环境要求，也可以继续引入其它语言类别，因为 go-playground/locales 基本上都支持。
+
+在后续的注册步骤，我们调用 RegisterDefaultTranslations 方法将验证器和对应语言类型的 Translator 注册进来，实现验证器的多语言支持。同时将 Translator 存储到全局上下文中，便于后续翻译时的使用。
+
+### 2.5.3.2 注册中间件
+
+回到项目的 `internal/routers` 目录下的 router.go 文件，新增中间件 Translations 的注册，新增代码如下：
+
+```go
+func NewRouter() *gin.Engine {
+	r := gin.New()
+	r.Use(gin.Logger())
+	r.Use(gin.Recovery())
+	r.Use(middleware.Translations())
+	...
+}
+```
+
+至此，我们就完成了在项目中的自定义验证器注册、验证器初始化、错误提示多语言的功能支持了。
+
+## 2.5.4 接口校验
+
+我们在项目下的 `pkg/app` 目录新建 form.go 文件，写入如下代码：
+
+```go
+import (
+	...
+	ut "github.com/go-playground/universal-translator"
+	val "github.com/go-playground/validator/v10"
+)
+
+type ValidError struct {
+	Key     string
+	Message string
+}
+
+type ValidErrors []*ValidError
+
+func (v *ValidError) Error() string {
+	return v.Message
+}
+
+func (v ValidErrors) Error() string {
+	return strings.Join(v.Errors(), ",")
+}
+
+func (v ValidErrors) Errors() []string {
+	var errs []string
+	for _, err := range v {
+		errs = append(errs, err.Error())
+	}
+
+	return errs
+}
+
+func BindAndValid(c *gin.Context, v interface{}) (bool, ValidErrors) {
+	var errs ValidErrors
+	err := c.ShouldBind(v)
+	if err != nil {
+		v := c.Value("trans")
+		trans, _ := v.(ut.Translator)
+		verrs, ok := err.(val.ValidationErrors)
+		if !ok {
+			return false, errs
+		}
+
+		for key, value := range verrs.Translate(trans) {
+			errs = append(errs, &ValidError{
+				Key:     key,
+				Message: value,
+			})
+		}
+
+		return false, errs
+	}
+
+	return true, nil
+}
+```
+
+在上述代码中，我们主要是针对入参校验的方法进行了二次封装，在 BindAndValid 方法中，通过 ShouldBind 进行参数绑定和入参校验，当发生错误后，再通过上一步在中间件 Translations 设置的 Translator 来对错误消息体进行具体的翻译行为。
+
+另外我们声明了 ValidError 相关的结构体和类型，对这块不熟悉的读者可能会疑惑为什么要实现其对应的 Error 方法呢，我们简单来看看标准库中 errors 的相关代码，如下：
+
+```go
+func New(text string) error {
+	return &errorString{text}
+}
+
+type errorString struct {
+	s string
+}
+
+func (e *errorString) Error() string {
+	return e.s
+}
+```
+
+标准库 errors 的 New 方法实现非常简单，errorString 是一个结构体，内含一个 s 字符串，也只有一个 Error 方法，就可以认定为 error 类型，这是为什么呢？这一切的关键都在于 error 接口的定义，如下：
+
+```go
+type error interface {
+	Error() string
+}
+```
+
+在 Go 语言中，如果一个类型实现了某个 interface 中的所有方法，那么编译器就会认为该类型实现了此 interface，它们是”一样“的。
+
+## 2.5.5 验证
+
+我们回到项目的 `internal/routers/api/v1` 下的 tag.go 文件，修改获取多个标签的 List 接口，用于验证 validator 是否正常，修改代码如下：
+
+```go
+func (t Tag) List(c *gin.Context) {
+	param := struct {
+		Name  string `form:"name" binding:"max=100"`
+		State uint8  `form:"state,default=1" binding:"oneof=0 1"`
+	}{}
+	response := app.NewResponse(c)
+	valid, errs := app.BindAndValid(c, &param)
+	if !valid {
+		global.Logger.Errorf("app.BindAndValid errs: %v", errs)
+		response.ToErrorResponse(errcode.InvalidParams.WithDetails(errs.Errors()...))
+		return
+	}
+
+	response.ToResponse(gin.H{})
+	return
+}
+```
+
+在命令行中利用 CURL 请求该接口，查看验证结果，如下：
+
+```shell
+$ curl -X GET http://127.0.0.1:8000/api/v1/tags\?state\=6
+{"code":10000001,"details":["State 必须是[0 1]中的一个"],"msg":"入参错误"}
+```
+
+另外你还需要注意到 TagListRequest 的校验规则里其实并没有 required，因此它的校验规则应该是有才校验，没有该入参的话，是默认无校验的，也就是没有 state 参数，也应该可以正常请求，如下：
+
+```shell
+$ curl -X GET http://127.0.0.1:8000/api/v1/tags          
+{}
+```
+
+在 Response 中我们调用的是 `gin.H` 作为返回结果集，因此该输出结果正确。
+
+## 2.5.6 小结
+
+在本章节中，我们介绍了在 gin 框架中如何通过 validator 来进行参数校验，而在一些定制化场景中，我们常常需要自定义验证器，这个时候我们可以通过实现 `binding.Validator` 接口的方式，来替换其自身的 validator：：
+
+```go
+// binding/binding.go
+type StructValidator interface {
+	ValidateStruct(interface{}) error
+	Engine() interface{}
+}
+
+func setupValidator() error {
+	// 将你所自定义的 validator 写入
+	binding.Validator = global.Validator
+	return nil
+}
+```
+
+也就是说如果你有定制化需求，也完全可以自己实现一个验证器，效仿我们前面的模式，就可以完全替代 gin 框架原本的 validator 使用了。
+
+而在章节的后半段，我们对业务接口进行了入参校验规则的编写，并且针对错误提示的多语言化问题（也可以理解为一个简单的国际化需求），通过中间件和多语言包的方式进行了实现，在未来如果你有更细致的国际化需求，也可以进一步的拓展。
+
