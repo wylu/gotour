@@ -1786,3 +1786,539 @@ func setupValidator() error {
 
 而在章节的后半段，我们对业务接口进行了入参校验规则的编写，并且针对错误提示的多语言化问题（也可以理解为一个简单的国际化需求），通过中间件和多语言包的方式进行了实现，在未来如果你有更细致的国际化需求，也可以进一步的拓展。
 
+# 2.6 模块开发：标签管理
+
+在初步完成了业务接口的入参校验的逻辑处理后，接下来我们正式的进入业务模块的业务逻辑开发，在本章节将完成标签模块的接口代码编写，涉及的接口如下：
+
+| 功能         | HTTP 方法 | 路径      |
+| ------------ | --------- | --------- |
+| 新增标签     | POST      | /tags     |
+| 删除指定标签 | DELETE    | /tags/:id |
+| 更新指定标签 | PUT       | /tags/:id |
+| 获取标签列表 | GET       | /tags     |
+
+## 2.6.1 新建 model 方法
+
+首先我们需要针对标签表进行处理，并在项目的 `internal/model` 目录下新建 tag.go 文件，针对标签模块的模型操作进行封装，并且只与实体产生关系，代码如下：
+
+```go
+func (t Tag) Count(db *gorm.DB) (int, error) {
+	var count int
+	if t.Name != "" {
+		db = db.Where("name = ?", t.Name)
+	}
+	db = db.Where("state = ?", t.State)
+	if err := db.Model(&t).Where("is_del = ?", 0).Count(&count).Error; err != nil {
+		return 0, err
+	}
+
+	return count, nil
+}
+
+func (t Tag) List(db *gorm.DB, pageOffset, pageSize int) ([]*Tag, error) {
+	var tags []*Tag
+	var err error
+	if pageOffset >= 0 && pageSize > 0 {
+		db = db.Offset(pageOffset).Limit(pageSize)
+	}
+	if t.Name != "" {
+		db = db.Where("name = ?", t.Name)
+	}
+	db = db.Where("state = ?", t.State)
+	if err = db.Where("is_del = ?", 0).Find(&tags).Error; err != nil {
+		return nil, err
+	}
+	
+	return tags, nil
+}
+
+func (t Tag) Create(db *gorm.DB) error {
+	return db.Create(&t).Error
+}
+
+func (t Tag) Update(db *gorm.DB) error {
+	return db.Model(&Tag{}).Where("id = ? AND is_del = ?", t.ID, 0).Update(t).Error
+}
+
+func (t Tag) Delete(db *gorm.DB) error {
+	return db.Where("id = ? AND is_del = ?", t.Model.ID, 0).Delete(&t).Error
+}
+```
+
+- Model：指定运行 DB 操作的模型实例，默认解析该结构体的名字为表名，格式为大写驼峰转小写下划线驼峰。若情况特殊，也可以编写该结构体的 TableName 方法用于指定其对应返回的表名。
+- Where：设置筛选条件，接受 map，struct 或 string 作为条件。
+- Offset：偏移量，用于指定开始返回记录之前要跳过的记录数。
+- Limit：限制检索的记录数。
+- Find：查找符合筛选条件的记录。
+- Updates：更新所选字段。
+- Delete：删除数据。
+- Count：统计行为，用于统计模型的记录数。
+
+需要注意的是，在上述代码中，我们采取的是将 `db *gorm.DB` 作为函数首参数传入的方式，而在业界中也有另外一种方式，是基于结构体传入的，两者本质上都可以实现目的，读者根据实际情况（使用习惯、项目规范等）进行选用即可，其各有利弊。
+
+## 2.6.2 处理 model 回调
+
+你会发现我们在编写 model 代码时，并没有针对我们的公共字段 created_on、modified_on、deleted_on、is_del 进行处理，难道不是在每一个 DB 操作中进行设置和修改吗？
+
+显然，这在通用场景下并不是最好的方案，因为如果每一个 DB 操作都去设置公共字段的值，那么不仅多了很多重复的代码，在要调整公共字段时工作量也会翻倍。
+
+我们可以采用设置 model callback 的方式去实现公共字段的处理，本项目使用的 ORM 库是 GORM，GORM 本身是提供回调支持的，因此我们可以根据自己的需要自定义 GORM 的回调操作，而在 GORM 中我们可以分别进行如下的回调相关行为：
+
+- 注册一个新的回调。
+- 删除现有的回调。
+- 替换现有的回调。
+- 注册回调的先后顺序。
+
+在本项目中使用到的“替换现有的回调”这一行为，我们打开项目的 `internal/model` 目录下的 model.go 文件，准备开始编写 model 的回调代码，下述所新增的回调代码均写入在 NewDBEngine 方法后。
+
+```go
+func NewDBEngine(databaseSetting *setting.DatabaseSettingS) (*gorm.DB, error) {}
+func updateTimeStampForCreateCallback(scope *gorm.Scope) {}
+func updateTimeStampForUpdateCallback(scope *gorm.Scope) {}
+func deleteCallback(scope *gorm.Scope) {}
+func addExtraSpaceIfExist(str string) string {}
+```
+
+### 2.6.2.1 新增行为的回调
+
+```go
+func updateTimeStampForCreateCallback(scope *gorm.Scope) {
+	if !scope.HasError() {
+		nowTime := time.Now().Unix()
+		if createTimeField, ok := scope.FieldByName("CreatedOn"); ok {
+			if createTimeField.IsBlank {
+				_ = createTimeField.Set(nowTime)
+			}
+		}
+
+		if modifyTimeField, ok := scope.FieldByName("ModifiedOn"); ok {
+			if modifyTimeField.IsBlank {
+				_ = modifyTimeField.Set(nowTime)
+			}
+		}
+	}
+}
+```
+
+- 通过调用 `scope.FieldByName` 方法，获取当前是否包含所需的字段。
+- 通过判断 `Field.IsBlank` 的值，可以得知该字段的值是否为空。
+- 若为空，则会调用 `Field.Set` 方法给该字段设置值，入参类型为 interface{}，内部也就是通过反射进行一系列操作赋值。
+
+### 2.6.2.2 更新行为的回调
+
+```go
+func updateTimeStampForUpdateCallback(scope *gorm.Scope) {
+	if _, ok := scope.Get("gorm:update_column"); !ok {
+		_ = scope.SetColumn("ModifiedOn", time.Now().Unix())
+	}
+}
+```
+
+- 通过调用 `scope.Get("gorm:update_column")` 去获取当前设置了标识 `gorm:update_column` 的字段属性。
+- 若不存在，也就是没有自定义设置 `update_column`，那么将会在更新回调内设置默认字段 ModifiedOn 的值为当前的时间戳。
+
+### 2.6.2.3 删除行为的回调
+
+```go
+func deleteCallback(scope *gorm.Scope) {
+	if !scope.HasError() {
+		var extraOption string
+		if str, ok := scope.Get("gorm:delete_option"); ok {
+			extraOption = fmt.Sprint(str)
+		}
+
+		deletedOnField, hasDeletedOnField := scope.FieldByName("DeletedOn")
+		isDelField, hasIsDelField := scope.FieldByName("IsDel")
+		if !scope.Search.Unscoped && hasDeletedOnField && hasIsDelField {
+			now := time.Now().Unix()
+			scope.Raw(fmt.Sprintf(
+				"UPDATE %v SET %v=%v,%v=%v%v%v",
+				scope.QuotedTableName(),
+				scope.Quote(deletedOnField.DBName),
+				scope.AddToVars(now),
+				scope.Quote(isDelField.DBName),
+				scope.AddToVars(1),
+				addExtraSpaceIfExist(scope.CombinedConditionSql()),
+				addExtraSpaceIfExist(extraOption),
+			)).Exec()
+		} else {
+			scope.Raw(fmt.Sprintf(
+				"DELETE FROM %v%v%v",
+				scope.QuotedTableName(),
+				addExtraSpaceIfExist(scope.CombinedConditionSql()),
+				addExtraSpaceIfExist(extraOption),
+			)).Exec()
+		}
+	}
+}
+
+func addExtraSpaceIfExist(str string) string {
+	if str != "" {
+		return " " + str
+	}
+	return ""
+}
+```
+
+- 通过调用 `scope.Get("gorm:delete_option")` 去获取当前设置了标识 `gorm:delete_option` 的字段属性。
+- 判断是否存在 `DeletedOn` 和 `IsDel` 字段，若存在则调整为执行 UPDATE 操作进行软删除（修改 DeletedOn 和 IsDel 的值），否则执行 DELETE 进行硬删除。
+- 调用 `scope.QuotedTableName` 方法获取当前所引用的表名，并调用一系列方法针对 SQL 语句的组成部分进行处理和转移，最后在完成一些所需参数设置后调用 `scope.CombinedConditionSql` 方法完成 SQL 语句的组装。
+
+### 2.6.2.4 注册回调行为
+
+```go
+func NewDBEngine(databaseSetting *setting.DatabaseSettingS) (*gorm.DB, error) {
+	...
+	db.SingularTable(true)
+	db.Callback().Create().Replace("gorm:update_time_stamp", updateTimeStampForCreateCallback)
+	db.Callback().Update().Replace("gorm:update_time_stamp", updateTimeStampForUpdateCallback)
+	db.Callback().Delete().Replace("gorm:delete", deleteCallback)
+	db.DB().SetMaxIdleConns(databaseSetting.MaxIdleConns)
+	db.DB().SetMaxOpenConns(databaseSetting.MaxOpenConns)
+
+	return db, nil
+}
+
+func updateTimeStampForCreateCallback(scope *gorm.Scope) {...}
+func updateTimeStampForUpdateCallback(scope *gorm.Scope) {...}
+func deleteCallback(scope *gorm.Scope) {...}
+func addExtraSpaceIfExist(str string) string {...}
+```
+
+在最后我们回到 NewDBEngine 方法中，针对上述写的三个 Callback 方法进行回调注册，才能够让我们的应用程序真正的使用上，至此，我们的公共字段处理就完成了。
+
+## 2.6.3 新建 dao 方法
+
+我们在项目的 `internal/dao` 目录下新建 dao.go 文件，写入如下代码：
+
+```go
+type Dao struct {
+	engine *gorm.DB
+}
+
+func New(engine *gorm.DB) *Dao {
+	return &Dao{engine: engine}
+}
+```
+
+接下来在同层级下新建 tag.go 文件，用于处理标签模块的 dao 操作，写入如下代码：
+
+```go
+func (d *Dao) CountTag(name string, state uint8) (int, error) {
+	tag := model.Tag{Name: name, State: state}
+	return tag.Count(d.engine)
+}
+
+func (d *Dao) GetTagList(name string, state uint8, page, pageSize int) ([]*model.Tag, error) {
+	tag := model.Tag{Name: name, State: state}
+	pageOffset := app.GetPageOffset(page, pageSize)
+	return tag.List(d.engine, pageOffset, pageSize)
+}
+
+func (d *Dao) CreateTag(name string, state uint8, createdBy string) error {
+	tag := model.Tag{
+		Name:  name,
+		State: state,
+		Model: &model.Model{CreatedBy: createdBy},
+	}
+
+	return tag.Create(d.engine)
+}
+
+func (d *Dao) UpdateTag(id uint32, name string, state uint8, modifiedBy string) error {
+	tag := model.Tag{
+		Name:  name,
+		State: state,
+		Model: &model.Model{ID: id, ModifiedBy: modifiedBy},
+	}
+
+	return tag.Update(d.engine)
+}
+
+func (d *Dao) DeleteTag(id uint32) error {
+	tag := model.Tag{Model: &model.Model{ID: id}}
+	return tag.Delete(d.engine)
+}
+```
+
+在上述代码中，我们主要是在 dao 层进行了数据访问对象的封装，并针对业务所需的字段进行了处理。
+
+## 2.6.4 新建 service 方法
+
+我们在项目的 `internal/service` 目录下新建 service.go 文件，写入如下代码：
+
+```go
+type Service struct {
+	ctx context.Context
+	dao *dao.Dao
+}
+
+func New(ctx context.Context) Service {
+	svc := Service{ctx: ctx}
+	svc.dao = dao.New(global.DBEngine)
+	return svc
+}
+```
+
+接下来在同层级下新建 tag.go 文件，用于处理标签模块的业务逻辑，写入如下代码：
+
+```go
+type CountTagRequest struct {
+    Name  string `form:"name" binding:"max=100"`
+	State uint8 `form:"state,default=1" binding:"oneof=0 1"`
+}
+
+type TagListRequest struct {
+	Name  string `form:"name" binding:"max=100"`
+	State uint8  `form:"state,default=1" binding:"oneof=0 1"`
+}
+
+type CreateTagRequest struct {
+	Name      string `form:"name" binding:"required,min=2,max=100"`
+	CreatedBy string `form:"created_by" binding:"required,min=2,max=100"`
+	State     uint8  `form:"state,default=1" binding:"oneof=0 1"`
+}
+
+type UpdateTagRequest struct {
+	ID         uint32 `form:"id" binding:"required,gte=1"`
+	Name       string `form:"name" binding:"max=100"`
+	State      uint8  `form:"state" binding:"oneof=0 1"`
+	ModifiedBy string `form:"modified_by" binding:"required,min=2,max=100"`
+}
+
+type DeleteTagRequest struct {
+	ID uint32 `form:"id" binding:"required,gte=1"`
+}
+
+func (svc *Service) CountTag(param *CountTagRequest) (int, error) {
+	return svc.dao.CountTag(param.Name, param.State)
+}
+
+func (svc *Service) GetTagList(param *TagListRequest, pager *app.Pager) ([]*model.Tag, error) {
+	return svc.dao.GetTagList(param.Name, param.State, pager.Page, pager.PageSize)
+}
+
+func (svc *Service) CreateTag(param *CreateTagRequest) error {
+	return svc.dao.CreateTag(param.Name, param.State, param.CreatedBy)
+}
+
+func (svc *Service) UpdateTag(param *UpdateTagRequest) error {
+	return svc.dao.UpdateTag(param.ID, param.Name, param.State, param.ModifiedBy)
+}
+
+func (svc *Service) DeleteTag(param *DeleteTagRequest) error {
+	return svc.dao.DeleteTag(param.ID)
+}
+```
+
+在上述代码中，我们主要是定义了 Request 结构体作为接口入参的基准，而本项目由于并不会太复杂，所以直接放在了 service 层中便于使用，若后续业务不断增长，程序越来越复杂，service 也冗杂了，可以考虑将抽离一层接口校验层，便于解耦逻辑。
+
+另外我们还在 service 进行了一些简单的逻辑封装，在应用分层中，service 层主要是针对业务逻辑的封装，如果有一些业务聚合和处理可以在该层进行编码，同时也能较好的隔离上下两层的逻辑。
+
+## 2.6.6 新增业务错误码
+
+我们在项目的 `pkg/errcode` 下新建 module_code.go 文件，针对标签模块，写入如下错误代码：
+
+```go
+var (
+	ErrorGetTagListFail = NewError(20010001, "获取标签列表失败")
+	ErrorCreateTagFail  = NewError(20010002, "创建标签失败")
+	ErrorUpdateTagFail  = NewError(20010003, "更新标签失败")
+	ErrorDeleteTagFail  = NewError(20010004, "删除标签失败")
+	ErrorCountTagFail   = NewError(20010005, "统计标签失败")
+)
+```
+
+## 2.6.7 新增路由方法
+
+我们打开 `internal/routers/api/v1` 项目目录下的 tag.go 文件，写入如下代码：
+
+```go
+func (t Tag) List(c *gin.Context) {
+	param := service.TagListRequest{}
+	response := app.NewResponse(c)
+	valid, errs := app.BindAndValid(c, &param)
+	if !valid {
+		global.Logger.Errorf("app.BindAndValid errs: %v", errs)
+		response.ToErrorResponse(errcode.InvalidParams.WithDetails(errs.Errors()...))
+		return
+	}
+
+	svc := service.New(c.Request.Context())
+	pager := app.Pager{Page: app.GetPage(c), PageSize: app.GetPageSize(c)}
+	totalRows, err := svc.CountTag(&service.CountTagRequest{Name: param.Name, State: param.State})
+	if err != nil {
+		global.Logger.Errorf("svc.CountTag err: %v", err)
+		response.ToErrorResponse(errcode.ErrorCountTagFail)
+		return
+	}
+	
+	tags, err := svc.GetTagList(&param, &pager)
+	if err != nil {
+		global.Logger.Errorf("svc.GetTagList err: %v", err)
+		response.ToErrorResponse(errcode.ErrorGetTagListFail)
+		return
+	}
+
+	response.ToResponseList(tags, totalRows)
+	return
+}
+```
+
+在上述代码中，我们完成了获取标签列表接口的处理方法，我们在方法中完成了入参校验和绑定、获取标签总数、获取标签列表、 序列化结果集等四大功能板块的逻辑串联和日志、错误处理。
+
+需要注意的是入参校验和绑定的处理代码基本都差不多，因此在后续代码中不再重复，我们继续写入创建标签、更新标签、删除标签的接口处理方法，如下：
+
+```go
+func (t Tag) Create(c *gin.Context) {
+	param := service.CreateTagRequest{}
+	response := app.NewResponse(c)
+	valid, errs := app.BindAndValid(c, &param)
+	if !valid {...}
+
+	svc := service.New(c.Request.Context())
+	err := svc.CreateTag(&param)
+	if err != nil {
+		global.Logger.Errorf("svc.CreateTag err: %v", err)
+		response.ToErrorResponse(errcode.ErrorCreateTagFail)
+		return
+	}
+
+	response.ToResponse(gin.H{})
+	return
+}
+
+func (t Tag) Update(c *gin.Context) {
+	param := service.UpdateTagRequest{ID: convert.StrTo(c.Param("id")).MustUInt32()}
+	response := app.NewResponse(c)
+	valid, errs := app.BindAndValid(c, &param)
+	if !valid {...}
+
+	svc := service.New(c.Request.Context())
+	err := svc.UpdateTag(&param)
+	if err != nil {
+		global.Logger.Errorf("svc.UpdateTag err: %v", err)
+		response.ToErrorResponse(errcode.ErrorUpdateTagFail)
+		return
+	}
+
+	response.ToResponse(gin.H{})
+	return
+}
+
+func (t Tag) Delete(c *gin.Context) {
+	param := service.DeleteTagRequest{ID: convert.StrTo(c.Param("id")).MustUInt32()}
+	response := app.NewResponse(c)
+	valid, errs := app.BindAndValid(c, &param)
+	if !valid {...}
+
+	svc := service.New(c.Request.Context())
+	err := svc.DeleteTag(&param)
+	if err != nil {
+		global.Logger.Errorf("svc.DeleteTag err: %v", err)
+		response.ToErrorResponse(errcode.ErrorDeleteTagFail)
+		return
+	}
+
+	response.ToResponse(gin.H{})
+	return
+}
+```
+
+## 2.6.8 验证接口
+
+我们重新启动服务，也就是再执行 `go run main.go`，查看启动信息正常后，对标签模块的接口进行验证，请注意，验证示例中的 `{id}`，代指占位符，也就是填写你实际调用中希望处理的标签 ID 即可。
+
+### 2.6.8.1 新增标签
+
+```shell
+$ curl -X POST http://127.0.0.1:8000/api/v1/tags -F 'name=Go' -F created_by=eddycjy
+{}
+$ curl -X POST http://127.0.0.1:8000/api/v1/tags -F 'name=PHP' -F created_by=eddycjy
+{}
+$ curl -X POST http://127.0.0.1:8000/api/v1/tags -F 'name=Rust' -F created_by=eddycjy
+{}
+```
+
+### 2.6.8.2 获取标签列表
+
+```shell
+$ curl -X GET 'http://127.0.0.1:8000/api/v1/tags?page=1&page_size=2'
+{"list":[{"id":1,"created_by":"eddycjy","modified_by":"","created_on":1574493416,"modified_on":1574493416,"deleted_on":0,"is_del":0,"name":"Go 语言","state":1},{"id":2,"created_by":"eddycjy","modified_by":"","created_on":1574493813,"modified_on":1574493813,"deleted_on":0,"is_del":0,"name":"PHP","state":1}],"pager":{"page":1,"page_size":2,"total_rows":3}}
+
+$ curl -X GET 'http://127.0.0.1:8000/api/v1/tags?page=2&page_size=2'
+{"list":[{"id":3,"created_by":"eddycjy","modified_by":"","created_on":1574493817,"modified_on":1574493817,"deleted_on":0,"is_del":0,"name":"Rust","state":1}],"pager":{"page":2,"page_size":2,"total_rows":3}}
+```
+
+### 2.6.8.3 修改标签
+
+```shell
+$ curl -X PUT http://127.0.0.1:8000/api/v1/tags/{id} -F state=0 -F modified_by=eddycjy
+{}
+```
+
+### 2.6.8.4 删除标签
+
+```shell
+$ curl -X DELETE  http://127.0.0.1:8000/api/v1/tags/{id}
+{}
+```
+
+## 2.6.9 发现问题
+
+在完成了接口的检验后，我们还要确定一下数据库内的数据变更是否正确。在经过一系列的对比后，我们发现在调用修新标签的接口时，通过接口入参，我们是希望将 id 为 1 的标签状态修改为 0，但是在对比后发现数据库内它的状态值居然还是 1，而且 SQL 语句内也没有出现 state 字段的设置，太神奇了，控制台输出的 SQL 语句如下：
+
+```shell
+UPDATE `blog_tag` SET `id` = 1, `modified_by` = 'eddycjy', `modified_on` = xxxxx  WHERE `blog_tag`.`id` = 1
+```
+
+甚至在我们更进一步其它类似的验证时，发现只要字段是零值的情况下，GORM 就不会对该字段进行变更，这到底是为什么呢？
+
+实际上，这有一个概念上的问题，我们先入为主的认为它一定会变更，其实是不对的，因为在我们程序中使用的是 struct 的方式进行更新操作，而在 GORM 中使用 struct 类型传入进行更新时，GORM 是不会对值为零值的字段进行变更。这又是为什么呢，我们可以猜想，更根本的原因是因为在识别这个结构体中的这个字段值时，很难判定是真的是零值，还是外部传入恰好是该类型的零值，GORM 在这块并没有过多的去做特殊识别。
+
+## 2.6.10 解决问题
+
+修改项目的 `internal/model` 目录下的 tag.go 文件里的 Update 方法，如下：
+
+```go
+func (t Tag) Update(db *gorm.DB, values interface{}) error {
+	if err := db.Model(t).Where("id = ? AND is_del = ?", t.ID, 0).Updates(values).Error; err != nil {
+		return err
+	}
+
+	return nil
+}
+```
+
+修改项目的 `internal/dao` 目录下的 tag.go 文件里的 UpdateTag 方法，如下：
+
+```go
+func (d *Dao) UpdateTag(id uint32, name string, state uint8, modifiedBy string) error {
+	tag := model.Tag{
+		Model: &model.Model{ID: id},
+	}
+	values := map[string]interface{}{
+		"state":       state,
+		"modified_by": modifiedBy,
+	}
+	if name != "" {
+		values["name"] = name
+	}
+
+	return tag.Update(d.engine, values)
+}
+```
+
+重新运行程序，请求修改标签接口，如下：
+
+```shell
+$ curl -X PUT http://127.0.0.1:8000/api/v1/tags/{id} -F state=0 -F modified_by=eddycjy
+{}
+```
+
+检查数据是否正常修改，在正确的情况下，该 id 为 1 的标签，modified_by 为 eddycjy，modified_on 应修改为当前时间戳，state 为 0。
+
+## 2.6.11 小结
+
+在本章节中，我们针对 “标签管理” 进行了具体的开发，其中涉及到了 model、dao、service、router 的相关方法以及业务错误码的编写和处理。接下来下一步应当是 “文章管理” 的模块开发，我强烈建议读者根据本章的经验，自行构思设计思路，然后亲自思考和实践，这样子对你未来对实际项目进行开发会有明显帮助。而在开发时，或开发后，如果遇到困难可以参考本书的辅导资料，有包含 “文章管理” 的详细模块开发内容说明。
+
