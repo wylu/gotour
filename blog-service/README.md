@@ -2322,3 +2322,371 @@ $ curl -X PUT http://127.0.0.1:8000/api/v1/tags/{id} -F state=0 -F modified_by=e
 
 在本章节中，我们针对 “标签管理” 进行了具体的开发，其中涉及到了 model、dao、service、router 的相关方法以及业务错误码的编写和处理。接下来下一步应当是 “文章管理” 的模块开发，我强烈建议读者根据本章的经验，自行构思设计思路，然后亲自思考和实践，这样子对你未来对实际项目进行开发会有明显帮助。而在开发时，或开发后，如果遇到困难可以参考本书的辅导资料，有包含 “文章管理” 的详细模块开发内容说明。
 
+# 2.7 上传图片和文件服务
+
+在处理文章模块时，你会发现 blog_article 表中的封面图片地址（cover_image_url）是我们直接手动传入的一个虚构地址，那么在实际的应用中，一般不同的架构分层有多种处理方式，例如：由浏览器端调用前端应用，前端应用（客户端）再调用服务端进行上传，第二种是浏览器端直接调用服务端接口上传文件，再调用服务器端的其它业务接口完成业务属性填写。
+
+那么在本章节我们将继续完善功能，实现文章的封面图片上传并用文件服务对外提供静态文件的访问服务，这样子在上传图片后，就可以通过约定的地址访问到该图片资源。
+
+## 2.7.1 新增配置
+
+首先我们打开项目下的 `configs/config.yaml` 配置文件，新增上传相关的配置，如下：
+
+```shell
+App:
+  ...
+  UploadSavePath: storage/uploads
+  UploadServerUrl: http://127.0.0.1:8000/static
+  UploadImageMaxSize: 5  # MB
+  UploadImageAllowExts:
+    - .jpg
+    - .jpeg
+    - .png
+```
+
+我们一共新增了四项上传文件所必须的配置项，分别代表的作用如下：
+
+- UploadSavePath：上传文件的最终保存目录。
+- UploadServerUrl：上传文件后的用于展示的文件服务地址。
+- UploadImageMaxSize：上传文件所允许的最大空间大小（MB）。
+- UploadImageAllowExts：上传文件所允许的文件后缀。
+
+接下来我们要在对应的配置结构体上新增上传相关属性，打开项目下的 `pkg/setting/section.go` 新增代码如下：
+
+```go
+type AppSettingS struct {
+	...
+	UploadSavePath       string
+	UploadServerUrl      string
+	UploadImageMaxSize   int
+	UploadImageAllowExts []string
+}
+```
+
+## 2.7.2 上传文件
+
+接下来我们要编写一个上传文件的工具库，它的主要功能是针对上传文件时的一些相关处理。我们在项目的 `pkg` 目录下新建 `util` 目录，并创建 md5.go 文件，写入如下代码：
+
+```go
+func EncodeMD5(value string) string {
+	m := md5.New()
+	m.Write([]byte(value))
+
+	return hex.EncodeToString(m.Sum(nil))
+}
+```
+
+该方法用于针对上传后的文件名格式化，简单来讲，将文件名 MD5 后再进行写入，防止直接把原始名称就暴露出去了。接下来我们在项目的 `pkg/upload` 目录下新建 file.go 文件，代码如下：
+
+```go
+type FileType int
+
+const TypeImage FileType = iota + 1
+
+func GetFileName(name string) string {
+	ext := GetFileExt(name)
+	fileName := strings.TrimSuffix(name, ext)
+	fileName = util.EncodeMD5(fileName)
+
+	return fileName + ext
+}
+
+func GetFileExt(name string) string {
+	return path.Ext(name)
+}
+
+func GetSavePath() string {
+	return global.AppSetting.UploadSavePath
+}
+```
+
+在上述代码中，我们用到了两个比较常见的语法，首先是我们定义了 FileType 为 int 的类型别名，并且利用 FileType 作为类别标识的基础类型，并 iota 作为了它的初始值，那么 iota 又是什么呢？
+
+实际上，在 Go 语言中 iota 相当于是一个 const 的常量计数器，你也可以理解为枚举值，第一个声明的 iota 的值为 0，在新的一行被使用时，它的值都会自动递增。
+
+当然了，你也可以像代码中那样，在初始的第一个声明时进行手动加一，那么它将会从 1 开始递增。那么为什么我们要在 FileType 类型中使用 iota 的枚举呢，其实本质上是为了后续有其它的需求，能标准化的进行处理，例如：
+
+```go
+const (
+    TypeImage FileType = iota + 1
+    TypeExcel
+    TypeTxt
+)
+```
+
+如果未来再有其它的上传文件类型支持，这么看，是不是就很清晰了呢，不再像以前，你还要手工定义 1, 2, 3, 4….非常麻烦。
+
+另外我们还一共声明了四个文件相关的方法，其作用分别如下：
+
+- GetFileName：获取文件名称，先是通过获取文件后缀并筛出原始文件名进行 MD5 加密，最后返回经过加密处理后的文件名。
+- GetFileExt：获取文件后缀，主要是通过调用 `path.Ext` 方法进行循环查找”.“符号，最后通过切片索引返回对应的文化后缀名称。
+- GetSavePath：获取文件保存地址，这里直接返回配置中的文件保存目录即可，也便于后续的调整。
+
+在完成了文件相关参数获取的方法后，接下来我们需要编写检查文件的相关方法，因为需要确保在文件写入时它已经达到了必备条件，否则要给出对应的标准错误提示，继续在文件内新增如下代码：
+
+```go
+func CheckSavePath(dst string) bool {
+	_, err := os.Stat(dst)
+	return os.IsNotExist(err)
+}
+
+func CheckContainExt(t FileType, name string) bool {
+	ext := GetFileExt(name)
+	ext = strings.ToUpper(ext)
+	switch t {
+	case TypeImage:
+		for _, allowExt := range global.AppSetting.UploadImageAllowExts {
+			if strings.ToUpper(allowExt) == ext {
+				return true
+			}
+		}
+
+	}
+
+	return false
+}
+
+func CheckMaxSize(t FileType, f multipart.File) bool {
+	content, _ := ioutil.ReadAll(f)
+	size := len(content)
+	switch t {
+	case TypeImage:
+		if size >= global.AppSetting.UploadImageMaxSize*1024*1024 {
+			return true
+		}
+	}
+
+	return false
+}
+
+func CheckPermission(dst string) bool {
+	_, err := os.Stat(dst)
+	return os.IsPermission(err)
+}
+```
+
+- CheckSavePath：检查保存目录是否存在，通过调用 `os.Stat` 方法获取文件的描述信息 FileInfo，并调用 `os.IsNotExist` 方法进行判断，其原理是利用 `os.Stat` 方法所返回的 error 值与系统中所定义的 `oserror.ErrNotExist` 进行判断，以此达到校验效果。
+- CheckPermission：检查文件权限是否足够，与 `CheckSavePath` 方法原理一致，是利用 `oserror.ErrPermission` 进行判断。
+- CheckContainExt：检查文件后缀是否包含在约定的后缀配置项中，需要的是所上传的文件的后缀有可能是大写、小写、大小写等，因此我们需要调用 `strings.ToUpper` 方法统一转为大写（固定的格式）来进行匹配。
+- CheckMaxSize：检查文件大小是否超出最大大小限制。
+
+在完成检查文件的一些必要操作后，我们就可以涉及文件写入/创建的相关操作，继续在文件内新增如下代码：
+
+```go
+func CreateSavePath(dst string, perm os.FileMode) error {
+	err := os.MkdirAll(dst, perm)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func SaveFile(file *multipart.FileHeader, dst string) error {
+	src, err := file.Open()
+	if err != nil {
+		return err
+	}
+	defer src.Close()
+
+	out, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+
+	_, err = io.Copy(out, src)
+	return err
+}
+```
+
+- CreateSavePath：创建在上传文件时所使用的保存目录，在方法内部调用的 `os.MkdirAll` 方法，该方法将会以传入的 `os.FileMode` 权限位去递归创建所需的所有目录结构，若涉及的目录均已存在，则不会进行任何操作，直接返回 nil。
+- SaveFile：保存所上传的文件，该方法主要是通过调用 `os.Create` 方法创建目标地址的文件，再通过 `file.Open` 方法打开源地址的文件，结合 `io.Copy` 方法实现两者之间的文件内容拷贝。
+
+## 2.7.3 新建 service 方法
+
+我们将上一步所编写的上传文件工具库与我们具体的业务接口结合起来，我们在项目下的 `internal/service` 目录新建 upload.go 文件，写入如下代码：
+
+```go
+type FileInfo struct {
+	Name      string
+	AccessUrl string
+}
+
+func (svc *Service) UploadFile(fileType upload.FileType, file multipart.File, fileHeader *multipart.FileHeader) (*FileInfo, error) {
+	fileName := upload.GetFileName(fileHeader.Filename)
+	if !upload.CheckContainExt(fileType, fileName) {
+		return nil, errors.New("file suffix is not supported.")
+	}
+	if upload.CheckMaxSize(fileType, file) {
+		return nil, errors.New("exceeded maximum file limit.")
+	}
+
+	uploadSavePath := upload.GetSavePath()
+	if upload.CheckSavePath(uploadSavePath) {
+		if err := upload.CreateSavePath(uploadSavePath, os.ModePerm); err != nil {
+			return nil, errors.New("failed to create save directory.")
+		}
+	}
+	if upload.CheckPermission(uploadSavePath) {
+		return nil, errors.New("insufficient file permissions.")
+	}
+
+	dst := uploadSavePath + "/" + fileName
+	if err := upload.SaveFile(fileHeader, dst); err != nil {
+		return nil, err
+	}
+
+	accessUrl := global.AppSetting.UploadServerUrl + "/" + fileName
+	return &FileInfo{Name: fileName, AccessUrl: accessUrl}, nil
+}
+```
+
+我们在 UploadFile Service 方法中，主要是通过获取文件所需的基本信息，接着对其进行业务所需的文件检查（文件大小是否符合需求、文件后缀是否达到要求），并且判断在写入文件前对否具备必要的写入条件（目录是否存在、权限是否足够），最后在检查通过后再进行真正的写入文件操作。
+
+## 2.7.4 新增业务错误码
+
+在项目的 `pkg/errcode` 下的 module_code.go 文件，针对上传模块，新增如下错误代码：
+
+```go
+var (
+	...
+	ErrorUploadFileFail = NewError(20030001, "上传文件失败")
+)
+```
+
+## 2.7.5 新增路由方法
+
+接下来需要编写上传文件的路由方法，将整套上传逻辑给串联起来，我们在项目的 `internal/routers` 目录下新建 upload.go 文件，代码如下：
+
+```go
+type Upload struct{}
+
+func NewUpload() Upload {
+	return Upload{}
+}
+
+
+func (u Upload) UploadFile(c *gin.Context) {
+	response := app.NewResponse(c)
+	file, fileHeader, err := c.Request.FormFile("file")
+	if err != nil {
+		response.ToErrorResponse(errcode.InvalidParams.WithDetails(err.Error()))
+		return
+	}
+
+	fileType := convert.StrTo(c.PostForm("type")).MustInt()
+	if fileHeader == nil || fileType <= 0 {
+		response.ToErrorResponse(errcode.InvalidParams)
+		return
+	}
+
+	svc := service.New(c.Request.Context())
+	fileInfo, err := svc.UploadFile(upload.FileType(fileType), file, fileHeader)
+	if err != nil {
+		global.Logger.Errorf(c, "svc.UploadFile err: %v", err)
+		response.ToErrorResponse(errcode.ErrorUploadFileFail.WithDetails(err.Error()))
+		return
+	}
+
+	response.ToResponse(gin.H{
+		"file_access_url": fileInfo.AccessUrl,
+	})
+}
+```
+
+在上述代码中，我们通过 `c.Request.FormFile` 读取入参 file 字段的上传文件信息，并利用入参 type 字段作为所上传文件类型的确立依据（也可以通过解析上传文件后缀来确定文件类型），最后通过入参检查后进行 Serivce 的调用，完成上传和文件保存，返回文件的展示地址。
+
+至此，业务接口的编写就完成了，下一步我们需要添加路由，让外部能够访问到该接口，依旧是在 `internal/routers` 目录下的 router.go 文件，我们在之中新增上传文件的对应路由，如下：
+
+```go
+func NewRouter() *gin.Engine {
+	...
+	upload := api.NewUpload()
+	r.POST("/upload/file", upload.UploadFile)
+	apiv1 := r.Group("/api/v1"){...}
+}
+```
+
+我们新增了 POST 方法的 `/upload/file` 路由，并调用其 upload.UploadFile 方法来提供接口的方法响应，至此整体的路由到业务接口的联通就完成了。
+
+## 2.7.6 验证接口
+
+```shell
+$ curl -X POST http://127.0.0.1:8000/upload/file -F file=@{file_path} -F type=1
+{
+    "file_access_url": "http://127.0.0.1:8000/static/379efdddb61250a2c589e4c28744c4d9.jpeg"
+}
+```
+
+检查接口返回是否与期望的一致，主体是由 UploadServerUrl 与加密后的文件名称相结合。
+
+## 2.7.7 文件服务
+
+在进行接口的返回结果校验时，你会发现上小节中 file_access_url 这个地址压根就无法访问到对应的文件资源，检查文件资源也确实存在 `storage/uploads` 目录下，这是怎么回事呢？
+
+实际上是需要设置文件服务去提供静态资源的访问，才能实现让外部请求本项目 HTTP Server 时同时提供静态资源的访问，实际上在 gin 中实现 File Server 是非常简单的，我们需要在 NewRouter 方法中，新增如下路由：
+
+```go
+func NewRouter() *gin.Engine {
+	...
+	r.POST("/upload/file", upload.UploadFile)
+	r.StaticFS("/static", http.Dir(global.AppSetting.UploadSavePath))
+	apiv1 := r.Group("/api/v1"){...}
+	return r
+}
+```
+
+新增 StaticFS 路由完毕后，重新重启应用程序，再次访问 file_access_url 所输出的地址就可以查看到刚刚上传的静态文件了。
+
+## 2.7.8 发生了什么
+
+看到这里你可能会疑惑，为什么设置一个 r.StaticFS 的路由，就可以拥有一个文件服务，并且能够提供静态资源的访问呢，真是神奇。我们可以反过来思考，既然能够读取到文件的展示，那么就是在访问 `$HOST/static` 时，应用程序会读取到 `blog-service/storage/uploads` 下的文件。我们可以看看 StaticFS 方法到底做了什么事，方法原型如下：
+
+```go
+func (group *RouterGroup) StaticFS(relativePath string, fs http.FileSystem) IRoutes {
+	if strings.Contains(relativePath, ":") || strings.Contains(relativePath, "*") {
+		panic("URL parameters can not be used when serving a static folder")
+	}
+	handler := group.createStaticHandler(relativePath, fs)
+	urlPattern := path.Join(relativePath, "/*filepath")
+
+	group.GET(urlPattern, handler)
+	group.HEAD(urlPattern, handler)
+	return group.returnObj()
+}
+```
+
+首先可以看到在暴露的 URL 中程序禁止了“*”和“:”符号的使用，然后通过 `createStaticHandler` 创建了静态文件服务，其实质最终调用的还是 `fileServer.ServeHTTP` 和对应的处理逻辑，如下：
+
+```go
+func (group *RouterGroup) createStaticHandler(relativePath string, fs http.FileSystem) HandlerFunc {
+	absolutePath := group.calculateAbsolutePath(relativePath)
+	fileServer := http.StripPrefix(absolutePath, http.FileServer(fs))
+	_, nolisting := fs.(*onlyfilesFS)
+	return func(c *Context) {
+		if nolisting {
+			c.Writer.WriteHeader(404)
+		}
+		fileServer.ServeHTTP(c.Writer, c.Request)
+	}
+}
+```
+
+在 createStaticHandler 方法中，我们可以留意下 `http.StripPrefix` 方法的调用，实际上在静态文件服务中很常见，它主要作用是从请求 URL 的路径中删除给定的前缀，然后返回一个 Handler。
+
+另外我们在 StaticFS 方法中看到 `urlPattern := path.Join(relativePath, "/*filepath")` 的代码块，而 `/*filepath` 就非常迷惑了，它是什么，又有什么作用呢。我们通过语义可得知它是路由的处理逻辑，而 gin 的路由是基于 httprouter 的，通过查阅文档可以得到如下信息：
+
+```shell
+Pattern: /src/*filepath
+
+ /src/                     match
+ /src/somefile.go          match
+ /src/subdir/somefile.go   match
+```
+
+简单来讲，`*filepath` 将会匹配所有文件路径，但是前提是 `*filepath` 标识符必须在 Pattern 的最后。
+
+## 2.7.9 小结
+
+在本章节中我们针对文章所需的封面图，实现了上传图片接口和静态资源文件服务的功能，从中你可以学习到常见的文件处理操作以及文件服务访问的实现方式。另外在实际项目中，你有一点需要注意，你应当将应用服务和文件服务给拆分开来，因为从安全角度来讲，文件资源不应当与应用资源摆放在一起，否则会有风险，又或是直接采用市面上的 OSS 也是可以的。
