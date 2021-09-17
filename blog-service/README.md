@@ -55,7 +55,7 @@ blog-service
 ```shell
 CREATE DATABASE
 IF
-	NOT EXISTS blog_service DEFAULT CHARACTER 
+	NOT EXISTS blog_service DEFAULT CHARACTER
 	SET utf8mb4 DEFAULT COLLATE utf8mb4_general_ci;
 ```
 
@@ -228,7 +228,7 @@ func NewRouter() *gin.Engine {
 	r := gin.New()
 	r.Use(gin.Logger())
 	r.Use(gin.Recovery())
-	
+
 	apiv1 := r.Group("/api/v1")
 	{
 		apiv1.POST("/tags")
@@ -236,7 +236,7 @@ func NewRouter() *gin.Engine {
 		apiv1.PUT("/tags/:id")
 		apiv1.PATCH("/tags/:id/state")
 		apiv1.GET("/tags")
-		
+
 		apiv1.POST("/articles")
 		apiv1.DELETE("/articles/:id")
 		apiv1.PUT("/articles/:id")
@@ -710,7 +710,7 @@ func NewDBEngine(databaseSetting *setting.DatabaseSettingS) (*gorm.DB, error) {
 	if err != nil {
 		return nil, err
 	}
-	
+
 	if global.ServerSetting.RunMode == "debug" {
 		db.LogMode(true)
 	}
@@ -1208,7 +1208,7 @@ Swagger 相关的工具集会根据 OpenAPI 规范去生成各式各类的与接
 
 ```shell
 $ go get -u github.com/swaggo/swag/cmd/swag@v1.6.5
-$ go get -u github.com/swaggo/gin-swagger@v1.2.0 
+$ go get -u github.com/swaggo/gin-swagger@v1.2.0
 $ go get -u github.com/swaggo/files
 $ go get -u github.com/alecthomas/template
 ```
@@ -1226,14 +1226,14 @@ swag version v1.6.5
 
 在完成了 Swagger 关联库的安装后，我们需要针对项目里的 API 接口进行注解的编写，以便于后续在进行生成时能够正确的运行，接下来我们将使用到如下注解：
 
-| 注解     | 描述                                                         |
-| -------- | ------------------------------------------------------------ |
-| @Summary | 摘要                                                         |
+| 注解     | 描述                                                                                            |
+| -------- | ----------------------------------------------------------------------------------------------- |
+| @Summary | 摘要                                                                                            |
 | @Produce | API 可以产生的 MIME 类型的列表，MIME 类型你可以简单的理解为响应类型，例如：json、xml、html 等等 |
-| @Param   | 参数格式，从左到右分别为：参数名、入参类型、数据类型、是否必填、注释 |
-| @Success | 响应成功，从左到右分别为：状态码、参数类型、数据类型、注释   |
-| @Failure | 响应失败，从左到右分别为：状态码、参数类型、数据类型、注释   |
-| @Router  | 路由，从左到右分别为：路由地址，HTTP 方法                    |
+| @Param   | 参数格式，从左到右分别为：参数名、入参类型、数据类型、是否必填、注释                            |
+| @Success | 响应成功，从左到右分别为：状态码、参数类型、数据类型、注释                                      |
+| @Failure | 响应失败，从左到右分别为：状态码、参数类型、数据类型、注释                                      |
+| @Router  | 路由，从左到右分别为：路由地址，HTTP 方法                                                       |
 
 ### 2.4.4.1 API
 
@@ -1387,7 +1387,7 @@ func (s *s) ReadDoc() string {
 	sInfo := SwaggerInfo
 	sInfo.Description = strings.Replace(sInfo.Description, "\n", "\\n", -1)
 	t, _ := template.New("swagger_info").Funcs(template.FuncMap{...}).Parse(doc)
-	
+
 	var tpl bytes.Buffer
 	_ = t.Execute(&tpl, sInfo)
 	return tpl.String()
@@ -1758,7 +1758,7 @@ $ curl -X GET http://127.0.0.1:8000/api/v1/tags\?state\=6
 另外你还需要注意到 TagListRequest 的校验规则里其实并没有 required，因此它的校验规则应该是有才校验，没有该入参的话，是默认无校验的，也就是没有 state 参数，也应该可以正常请求，如下：
 
 ```shell
-$ curl -X GET http://127.0.0.1:8000/api/v1/tags          
+$ curl -X GET http://127.0.0.1:8000/api/v1/tags
 {}
 ```
 
@@ -1828,7 +1828,7 @@ func (t Tag) List(db *gorm.DB, pageOffset, pageSize int) ([]*Tag, error) {
 	if err = db.Where("is_del = ?", 0).Find(&tags).Error; err != nil {
 		return nil, err
 	}
-	
+
 	return tags, nil
 }
 
@@ -2152,7 +2152,7 @@ func (t Tag) List(c *gin.Context) {
 		response.ToErrorResponse(errcode.ErrorCountTagFail)
 		return
 	}
-	
+
 	tags, err := svc.GetTagList(&param, &pager)
 	if err != nil {
 		global.Logger.Errorf("svc.GetTagList err: %v", err)
@@ -2657,7 +2657,7 @@ func (group *RouterGroup) StaticFS(relativePath string, fs http.FileSystem) IRou
 }
 ```
 
-首先可以看到在暴露的 URL 中程序禁止了“*”和“:”符号的使用，然后通过 `createStaticHandler` 创建了静态文件服务，其实质最终调用的还是 `fileServer.ServeHTTP` 和对应的处理逻辑，如下：
+首先可以看到在暴露的 URL 中程序禁止了“\*”和“:”符号的使用，然后通过 `createStaticHandler` 创建了静态文件服务，其实质最终调用的还是 `fileServer.ServeHTTP` 和对应的处理逻辑，如下：
 
 ```go
 func (group *RouterGroup) createStaticHandler(relativePath string, fs http.FileSystem) HandlerFunc {
@@ -2690,3 +2690,483 @@ Pattern: /src/*filepath
 ## 2.7.9 小结
 
 在本章节中我们针对文章所需的封面图，实现了上传图片接口和静态资源文件服务的功能，从中你可以学习到常见的文件处理操作以及文件服务访问的实现方式。另外在实际项目中，你有一点需要注意，你应当将应用服务和文件服务给拆分开来，因为从安全角度来讲，文件资源不应当与应用资源摆放在一起，否则会有风险，又或是直接采用市面上的 OSS 也是可以的。
+
+# 2.8 对接口进行访问控制
+
+在完成了相关的业务接口的开发后，你正打算放到服务器上给其他同事查看时，你又想到了一个问题，这些 API 接口，没有鉴权功能，那就是所有知道地址的人都可以请求该项目的 API 接口和 Swagger 文档，甚至有可能会被网络上的端口扫描器扫描到后滥用，这非常的不安全，怎么办呢。实际上，我们应该要考虑做纵深防御，对 API 接口进行访问控制。
+
+目前市场上比较常见的两种 API 访问控制方案，分别是 OAuth 2.0 和 JWT，但实际上这两者并不能直接的进行对比，因为它们是两个完全不同的东西，对应的应用场景也不一样，我们可以先大致了解，如下：
+
+- OAuth 2.0：本质上是一个授权的行业标准协议，提供了一整套的授权机制的指导标准，常用于使用第三方登陆的情况，像是你在网站登录时，会有提供其它第三方站点（例如用微信、QQ、Github 账号）关联登陆的，往往就是用 OAuth 2.0 的标准去实现的。并且 OAuth 2.0 会相对重一些，常常还会授予第三方应用去获取到我们对应账号的个人基本信息等等。
+- JWT：与 OAuth 2.0 完全不同，它常用于前后端分离的情况，能够非常便捷的给 API 接口提供安全鉴权，因此在本章节我们采用的就是 JWT 的方式，来实现我们的 API 访问控制功能。
+
+## 2.8.1 JWT 是什么
+
+JSON Web 令牌（JWT）是一个开放标准（RFC7519），它定义了一种紧凑且自包含的方式，用于在各方之间作为 JSON 对象安全地传输信息。 由于此信息是经过数字签名的，因此可以被验证和信任。 可以使用使用 RSA 或 ECDSA 的公用/专用密钥对对 JWT 进行签名，其格式如下：
+
+![image](https://golang2.eddycjy.com/images/ch2/jwt-format.jpg)
+
+JSON Web 令牌（JWT）是由紧凑的形式三部分组成，这些部分由点 “.“ 分隔，组成为 ”xxxxx.yyyyy.zzzzz“ 的格式，三个部分分别代表的意义如下：
+
+- Header：头部。
+- Payload：有效载荷。
+- Signature：签名。
+
+### 2.8.1.1 Header
+
+Header（头部）通常由两部分组成，分别是令牌的类型和所使用的签名算法（HMAC SHA256、RSA 等），其会组成一个 JSON 对象用于描述其元数据，例如：
+
+```shell
+{
+  "alg": "HS256",
+  "typ": "JWT"
+}
+```
+
+在上述 JSON 中 alg 字段表示所使用的签名算法，默认是 HMAC SHA256（HS256），而 type 字段表示所使用的令牌类型，我们使用的 JWT 令牌类型，在最后会对上面的 JSON 对象进行 base64UrlEncode 算法进行转换成为 JWT 的第一部分。
+
+### 2.8.1.2 Payload
+
+Payload（有效负载）也是一个 JSON 对象，主要存储在 JWT 中实际传输的数据，如下：
+
+```shell
+{
+  "sub": "1234567890",
+  "name": "John Doe",
+  "admin": true
+}
+```
+
+- aud（Audience）：受众，也就是接受 JWT 的一方。
+- exp（ExpiresAt）：所签发的 JWT 过期时间，过期时间必须大于签发时间。
+- jti（JWT Id）：JWT 的唯一标识。
+- iat（IssuedAt）：签发时间
+- iss（Issuer）：JWT 的签发者。
+- nbf（Not Before）：JWT 的生效时间，如果未到这个时间则为不可用。
+- sub（Subject）：主题
+
+同样也会对该 JSON 对象进行 base64UrlEncode 算法将其转换为 JWT Token 的第二部分。
+
+这时候你需要注意一个问题点，也就是 JWT 在转换时用的 base64UrlEncode 算法，也就是它是可逆的，因此一些敏感信息请不要放到 JWT 中，若有特殊情况一定要放，也应当进行一定的加密处理。
+
+### 2.8.1.3 Signature
+
+Signature（签名）部分是对前面两个部分组合（Header+Payload）进行约定算法和规则的签名，而签名将会用于校验消息在整个过程中有没有被篡改，并且对有使用私钥进行签名的令牌，它还可以验证 JWT 的发送者是否它的真实身份。
+
+在签名的生成上，在应用程序指定了密钥（secret）后，会使用传入的指定签名算法（默认是 HMAC SHA256），然后通过下述的签名方式来完成 Signature（签名）部分的生成，如下：
+
+```shell
+HMACSHA256(
+  base64UrlEncode(header) + "." +
+  base64UrlEncode(payload),
+  secret)
+```
+
+因此我们可以看出 JWT 的第三部分是由 Header、Payload 以及 Secret 的算法组成而成的，因此它最终可达到用于校验消息是否被篡改的作用之一，因为如果一旦被篡改，Signature 就会无法对上。
+
+### 2.8.1.4 Base64UrlEncode
+
+我们可以在上述章节中不断的看到 Header、Payload 以及 Signature 的签名算法均使用到了 Base64UrlEncode 函数，它究竟是什么呢。
+
+实际上 Base64UrlEncode 是 Base64 算法的变种，为什么要变呢，原因是在业界中我们经常可以看到 JWT 令牌会被放入 Header 或 Query Param 中（也就是 URL）。
+
+而在 URL 中，一些个别字符是有特殊意义的，例如：“+”、“/”、“=” 等等，因此在 Base64UrlEncode 算法中，会对其进行替换，例如：“+” 替换为 “-”、“/” 替换成 “\_”、“=” 会被进行忽略处理，以此来保证 JWT 令牌的在 URL 中的可用性和准确性。
+
+## 2.8.2 JWT 的使用场景
+
+通常会先在内部约定好 JWT 令牌的交流方式，像是存储在 Header、Query Param、Cookie、Session 都有，但最常见的是存储在 Header 中。然后服务端提供一个获取 JWT 令牌的接口方法，返回而客户端去使用，在客户端请求其余的接口时需要带上所签发的 JWT 令牌，然后服务端接口也会到约定位置上获取 JWT 令牌来进行鉴权处理，以此流程来鉴定是否合法。
+
+## 2.8.3 安装 JWT
+
+接下来开始对项目进行 JWT 的相关处理，首先我们需要拉取 jwt-go 库，该库提供了 JSON Web 令牌（JWT）的 Go 实现，能够便捷的提供 JWT 支持，不需要我们自己亲自去实现，执行如下命令：
+
+```shell
+$ go get -u github.com/dgrijalva/jwt-go@v3.2.0
+```
+
+## 2.8.4 配置 JWT
+
+### 2.8.4.1 创建认证表
+
+在介绍 JWT 和其使用场景时，我们知道了实际上需要一个服务端的接口来提供 JWT 令牌的签发，并且可以将自定义的私有信息存入其中，那么我们必然需要一个地方来存储签发的凭证，否则谁来都签发，似乎不大符合实际的业务需求，因此我们要创建一个新的数据表，用于存储签发的认证信息，表 SQL 语句如下：
+
+```shell
+CREATE TABLE `blog_auth` (
+  `id` int(10) unsigned NOT NULL AUTO_INCREMENT,
+  `app_key` varchar(20) DEFAULT '' COMMENT 'Key',
+  `app_secret` varchar(50) DEFAULT '' COMMENT 'Secret',
+  # 此处请写入公共字段
+  PRIMARY KEY (`id`) USING BTREE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='认证管理';
+```
+
+上述表 SQL 语句的主要作用是创建了一张名为 blog_auth 的表，其核心是 app_key 和 app_secret 字段，用于签发的认证信息，接下来我们默认插入一条认证的 SQL 语句（你也可以做一个接口），便于我们认证接口的后续使用，插入的 SQL 语句如下：
+
+```shell
+INSERT INTO `blog_service`.`blog_auth`(`id`, `app_key`, `app_secret`, `created_on`, `created_by`, `modified_on`, `modified_by`, `deleted_on`, `is_del`) VALUES (1, 'eddycjy', 'go-programming-tour-book', 0, 'eddycjy', 0, '', 0, 0);
+```
+
+该条语句的主要作用是新增了一条 app_key 为 eddycjy 以及 app_secret 为 go-programming-tour-book 的数据。
+
+### 2.8.4.2 新建 model 对象
+
+接下来打开项目的 `internal/model` 目录下的 auth.go 文件，写入对应刚刚新增的 blog_auth 表的数据模型，如下：
+
+```go
+type Auth struct {
+	*Model
+	AppKey    string `json:"app_key"`
+	AppSecret string `json:"app_secret"`
+}
+
+func (a Auth) TableName() string {
+	return "blog_auth"
+}
+```
+
+### 2.8.4.2 初始化配置
+
+接下来需要针对 JWT 的一些相关配置进行设置，我们打开项目的 `configs/config.yaml` 配置文件，写入新的配置项，如下：
+
+```shell
+JWT:
+  Secret: eddycjy
+  Issuer: blog-service
+  Expire: 7200
+```
+
+然后对 JWT 的配置进行初始化操作，我们打开项目的启动文件 main.go，修改其 setupSetting 方法，如下：
+
+```go
+func setupSetting() error {
+   ...
+   err = s.ReadSection("JWT", &global.JWTSetting)
+   if err != nil {
+      return err
+   }
+
+   global.JWTSetting.Expire *= time.Second
+   ...
+}
+```
+
+在上述配置中，我们设置了 JWT 令牌的 Secret（密钥）为 eddycjy，签发者（Issuer）是 blog-service，有效时间（Expire）为 7200 秒，这里需要注意的是 Secret 千万不要暴露给外部，只能有服务端知道，否则是可以解密出来的，非常危险。
+
+## 2.8.5 处理 JWT 令牌
+
+虽然 jwt-go 库能够帮助我们快捷的处理 JWT 令牌相关的行为，但是我们还是需要根据我们的项目特性对其进行设计的，简单来讲，就是组合其提供的 API，设计我们的鉴权场景。
+
+接下来我们打开项目目录 `pkg/app` 并创建 jwt.go 文件，写入第一部分的代码：
+
+```go
+type Claims struct {
+	AppKey    string `json:"app_key"`
+	AppSecret string `json:"app_secret"`
+	jwt.StandardClaims
+}
+
+func GetJWTSecret() []byte {
+	return []byte(global.JWTSetting.Secret)
+}
+```
+
+这块主要涉及 JWT 的一些基本属性，第一个是 GetJWTSecret 方法，用于获取该项目的 JWT Secret，目前我们是直接使用配置所配置的 Secret，第二个是 Claims 结构体，分为两大块，第一块是我们所嵌入的 AppKey 和 AppSecret，用于我们自定义的认证信息，第二块是 `jwt.StandardClaims` 结构体，它是 jwt-go 库中预定义的，也是 JWT 的规范，其涉及字段如下：
+
+```go
+type StandardClaims struct {
+	Audience  string `json:"aud,omitempty"`
+	ExpiresAt int64  `json:"exp,omitempty"`
+	Id        string `json:"jti,omitempty"`
+	IssuedAt  int64  `json:"iat,omitempty"`
+	Issuer    string `json:"iss,omitempty"`
+	NotBefore int64  `json:"nbf,omitempty"`
+	Subject   string `json:"sub,omitempty"`
+}
+```
+
+我想你一看就明白了，它对应的其实是 2.8.1.2 章节中 Payload 的相关字段，这些字段都是非强制性但官方建议使用的预定义权利要求，能够提供一组有用的，可互操作的约定。
+
+接下来我们继续在 jwt.go 文件中写入第二部分代码，如下：
+
+```go
+func GenerateToken(appKey, appSecret string) (string, error) {
+	nowTime := time.Now()
+	expireTime := nowTime.Add(global.JWTSetting.Expire)
+	claims := Claims{
+		AppKey:    util.EncodeMD5(appKey),
+		AppSecret: util.EncodeMD5(appSecret),
+		StandardClaims: jwt.StandardClaims{
+			ExpiresAt: expireTime.Unix(),
+			Issuer:    global.JWTSetting.Issuer,
+		},
+	}
+
+	tokenClaims := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	token, err := tokenClaims.SignedString(GetJWTSecret())
+	return token, err
+}
+```
+
+在 GenerateToken 方法中，它承担了整个流程中比较重要的职责，也就是生成 JWT Token 的行为，主体的函数流程逻辑是根据客户端传入的 AppKey 和 AppSecret 以及在项目配置中所设置的签发者（Issuer）和过期时间（ExpiresAt），根据指定的算法生成签名后的 Token。这其中涉及两个的内部方法，如下：
+
+- jwt.NewWithClaims：根据 Claims 结构体创建 Token 实例，它一共包含两个形参，第一个参数是 SigningMethod，其包含 SigningMethodHS256、SigningMethodHS384、SigningMethodHS512 三种 crypto.Hash 加密算法的方案。第二个参数是 Claims，主要是用于传递用户所预定义的一些权利要求，便于后续的加密、校验等行为。
+- tokenClaims.SignedString：生成签名字符串，根据所传入 Secret 不同，进行签名并返回标准的 Token。
+
+接下来我们继续在 jwt.go 文件中写入第三部分代码，如下：
+
+```go
+func ParseToken(token string) (*Claims, error) {
+	tokenClaims, err := jwt.ParseWithClaims(token, &Claims{}, func(token *jwt.Token) (interface{}, error) {
+		return GetJWTSecret(), nil
+	})
+    if err != nil {
+	    return nil, err
+	}
+	if tokenClaims != nil {
+		if claims, ok := tokenClaims.Claims.(*Claims); ok && tokenClaims.Valid {
+			return claims, nil
+		}
+	}
+
+	return nil, err
+}
+```
+
+在 ParseToken 方法中，它主要的功能是解析和校验 Token，承担着与 GenerateToken 相对的功能，其函数流程主要是解析传入的 Token，然后根据 Claims 的相关属性要求进行校验。这其中涉及两个的内部方法，如下：
+
+- ParseWithClaims：用于解析鉴权的声明，方法内部主要是具体的解码和校验的过程，最终返回 `*Token`。
+- Valid：验证基于时间的声明，例如：过期时间（ExpiresAt）、签发者（Issuer）、生效时间（Not Before），需要注意的是，如果没有任何声明在令牌中，仍然会被认为是有效的。
+
+至此我们就完成了 JWT 令牌的生成、解析、校验的方法编写，我们会在后续的应用中间件中对其进行调用，使其能够在应用程序中将一整套的动作给串联起来。
+
+## 2.8.6 获取 JWT 令牌
+
+### 2.8.6.1 新建 model 方法
+
+在前面的章节中，我们为了记录 JWT 令牌的认证信息，新增了 blog_auth 表，因此我们需要新增同样的 model 行为，打开项目目录 `internal/model` 的 auth.go 文件，写入如下代码：
+
+```go
+func (a Auth) Get(db *gorm.DB) (Auth, error) {
+	var auth Auth
+	db = db.Where("app_key = ? AND app_secret = ? AND is_del = ?", a.AppKey, a.AppSecret, 0)
+	err := db.First(&auth).Error
+	if err != nil && err != gorm.ErrRecordNotFound {
+		return auth, err
+	}
+
+	return auth, nil
+}
+```
+
+上述方法主要是用于服务端在获取客户端所传入的 app_key 和 app_secret 后，根据所传入的认证信息进行获取，以此判别是否真的存在这一条数据。
+
+### 2.8.6.2 新建 dao 方法
+
+接下来打开项目目录 `internal/dao` 的 auth.go 文件，新增针对获取认证信息的方法，写入如下代码：
+
+```go
+func (d *Dao) GetAuth(appKey, appSecret string) (model.Auth, error) {
+	auth := model.Auth{AppKey: appKey, AppSecret: appSecret}
+	return auth.Get(d.engine)
+}
+```
+
+### 2.8.6.3 新建 service 方法
+
+接下来打开 `internal/service` 的 auth.go 文件，针对一些相应的基本逻辑进行处理，写入如下代码：
+
+```go
+type AuthRequest struct {
+	AppKey    string `form:"app_key" binding:"required"`
+	AppSecret string `form:"app_secret" binding:"required"`
+}
+
+func (svc *Service) CheckAuth(param *AuthRequest) error {
+	auth, err := svc.dao.GetAuth(param.AppKey, param.AppSecret)
+	if err != nil {
+		return err
+	}
+
+	if auth.ID > 0 {
+		return nil
+	}
+
+	return errors.New("auth info does not exist.")
+}
+```
+
+在上述代码中，我们声明了 AuthRequest 结构体用于接口入参的校验，AppKey 和 AppSecret 都设置为了必填项，在 CheckAuth 方法中，我们使用客户端所传入的认证信息作为筛选条件获取数据行，以此根据是否取到认证信息 ID 来进行是否存在的判定。
+
+### 2.8.6.4 新增路由方法
+
+接下来打开项目目录 `internal/routers/api` 的 auth.go 文件，写入如下代码：
+
+```go
+func GetAuth(c *gin.Context) {
+	param := service.AuthRequest{}
+	response := app.NewResponse(c)
+	valid, errs := app.BindAndValid(c, &param)
+	if !valid {
+		global.Logger.Errorf("app.BindAndValid errs: %v", errs)
+		response.ToErrorResponse(errcode.InvalidParams.WithDetails(errs.Errors()...))
+		return
+	}
+
+	svc := service.New(c.Request.Context())
+	err := svc.CheckAuth(&param)
+	if err != nil {
+		global.Logger.Errorf("svc.CheckAuth err: %v", err)
+		response.ToErrorResponse(errcode.UnauthorizedAuthNotExist)
+		return
+	}
+
+	token, err := app.GenerateToken(param.AppKey, param.AppSecret)
+	if err != nil {
+		global.Logger.Errorf("app.GenerateToken err: %v", err)
+		response.ToErrorResponse(errcode.UnauthorizedTokenGenerate)
+		return
+	}
+
+	response.ToResponse(gin.H{
+		"token": token,
+	})
+}
+```
+
+这块的逻辑主要是校验及获取入参后，绑定并获取到的 app_key 和 app_secrect 进行数据库查询，检查认证信息是否存在，若存在则进行 Token 的生成并返回。
+
+接下来我们打开项目目录 `internal/routers` 的 router.go 文件，新增 `auth` 相关路由，如下：
+
+```go
+func NewRouter() *gin.Engine {
+	...
+	r.POST("/auth", api.GetAuth)
+	...
+}
+```
+
+至此，就完成了获取 Token 的整套流程。
+
+### 2.8.6.7 接口验证
+
+在完成后，我们需要重新启动服务，并且验证获取 Token 的接口是否正常，如下：
+
+```shell
+$ curl -X POST \
+  'http://127.0.0.1:8000/auth' \
+  -d 'app_key: eddycjy' \
+  -d 'app_secret: go-programming-tour-book'
+
+{"token":"eyJhbGciOiJIUxxx.eyJhcHBfa2V5Ixxx.omW-x23ZVG5I7cjoWTLVUYxxx..."}
+```
+
+## 2.8.7 处理应用中间件
+
+### 2.8.7.1 编写 JWT 中间件
+
+在完成了获取 Token 的接口后，你可能会疑惑，能获取了 Token 了，但是对于其它的业务接口，它还没产生任何作用，那我们应该如何将整个应用流程给串起来呢。那么涉及特定类别的接口统一处理，那必然是选择应用中间件的方式，接下来我们打开项目目录 `internal/middleware` 并新建 jwt.go 文件，写入如下代码：
+
+```go
+func JWT() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var (
+			token string
+			ecode = errcode.Success
+		)
+		if s, exist := c.GetQuery("token"); exist {
+			token = s
+		} else {
+			token = c.GetHeader("token")
+		}
+		if token == "" {
+			ecode = errcode.InvalidParams
+		} else {
+			_, err := app.ParseToken(token)
+			if err != nil {
+				switch err.(*jwt.ValidationError).Errors {
+				case jwt.ValidationErrorExpired:
+					ecode = errcode.UnauthorizedTokenTimeout
+				default:
+					ecode = errcode.UnauthorizedTokenError
+				}
+			}
+		}
+
+		if ecode != errcode.Success {
+			response := app.NewResponse(c)
+			response.ToErrorResponse(ecode)
+			c.Abort()
+			return
+		}
+
+		c.Next()
+	}
+}
+```
+
+在上述代码中，我们通过 GetHeader 方法从 Header 中获取 token 参数，并调用 ParseToken 对其进行解析，再根据返回的错误类型进行断言判定。
+
+### 2.8.7.2 接入 JWT 中间件
+
+在完成了 JWT 的中间件编写后，我们需要将其接入到应用流程中，但是需要注意的是，并非所有的接口都需要用到 JWT 中间件，因此我们需要利用 gin 中的分组路由的概念，只针对 apiv1 的路由分组进行 JWT 中间件的引用，也就是只有 apiv1 路由分组里的路由方法会受此中间件的约束，如下：
+
+```go
+func NewRouter() *gin.Engine {
+	...
+	apiv1 := r.Group("/api/v1")
+	apiv1.Use(middleware.JWT()){...}
+	return r
+}
+```
+
+## 2.8.7.3 验证接口
+
+### 2.8.7.4 没有获取 Token
+
+```shell
+$ curl -X GET http://127.0.0.1:8000/api/v1/tags
+{"code":10000001,"msg":"入参错误"}
+```
+
+### 2.8.7.3.2 Token 错误
+
+```shell
+$ curl -X GET http://127.0.0.1:8000/api/v1/tags -H 'token: eyJhbGciOiJIUzI1NiIsInRxxx'
+{"code":10000004,"msg":"鉴权失败，Token 错误"}
+```
+
+### 2.8.7.3.3 Token 超时
+
+```shell
+$ curl -X GET http://127.0.0.1:8000/api/v1/tags -H 'token: eyJhbGciOiJIUzI1NiIsInRxxx'
+{"code":10000005,"msg":"鉴权失败，Token 超时"}
+```
+
+## 2.8.8 思考
+
+我们通过本章节的学习，可以得知 JWT 令牌的内容是非严格加密的，大体上只是进行 base64UrlEncode 的处理，也就是对 JWT 令牌机制有一定了解的人可以进行反向解密，我们在这里可以做一个演示，首先你先调用 `/auth` 接口获取一个全新 token，例如：
+
+```shell
+{
+    "token": "eyJhbGci...kpXVCJ9.eyJhcHBfa....DM5MTcsImlzcyI6ImJsb2ctc2VydmljZSJ9.phkGM6...Df1Cc8UC0"
+}
+```
+
+接下来针对你新获取的 Token 值，只需要手动复制中间那一段（也就是 Payload），然后编写一个测试 Demo 来进行 base64 的解码，Demo 代码如下：
+
+```go
+func main() {
+	payload, _ := base64.StdEncoding.DecodeString("eyJhcHBfa....DM5MTcsImlzcyI6ImJsb2ctc2VydmljZSJ9")
+	log.Println(string(payload))
+}
+```
+
+最终的输出结果，如下：
+
+```shell
+{"app_key":"27566...ccf1","app_secret":"7c97...f4","exp":1576403917,"iss":"blog-service"}
+```
+
+你可以看到，假设有人拦截到你的 Token 后，是可以通过你的 Token 去解密并获取到你的 Payload 信息，也就是至少你在在 Payload 中不应该明文存储重要的信息，若非要存，就必须要进行不可逆加密，这样子才可以确保一定的安全性。
+
+同时你也可以发现，过期时间（ExpiresAt）是存储在 Payload 中的，也就是 JWT 令牌一旦签发，在没有做特殊逻辑的情况下，过期时间是不可以再度变更的，因此务必根据自己的实际项目情况进行设计和思考。
