@@ -749,3 +749,228 @@ func TestOnEvicted(t *testing.T) {
 ### 5.2.5.3 小结
 
 LRU 是缓存淘汰算法中最常使用的算法，有一些大厂面试可能会让现场实现一个 LRU 算法，因此大家务必掌握该算法。groupcache 库使用的就是 LRU 算法。
+
+# 5.3 实现一个进程内缓存
+
+上一节讲解了常用的缓存算法和实现，但它们都是并发不安全的。本节我们基于前面的缓存淘汰算法，创建一个并发安全的进程内缓存库。
+
+## 5.3.1 支持并发读写
+
+我们通过 sync.RWMutex 来封装读写方法，使缓存支持并发读写。在上节提到的 Cache 接口定义文件中加上如下代码。
+
+```go
+// DefaultMaxBytes 默认允许占用的最大内存
+const DefaultMaxBytes = 1 << 29
+
+// safeCache 并发安全缓存
+type safeCache struct {
+	m     sync.RWMutex
+	cache Cache
+
+	nhit, nget int
+}
+
+func newSafeCache(cache Cache) *safeCache {
+	return &safeCache{
+		cache: cache,
+	}
+}
+
+func (sc *safeCache) set(key string, value interface{}) {
+	sc.m.Lock()
+	defer sc.m.Unlock()
+	sc.cache.Set(key, value)
+}
+
+func (sc *safeCache) get(key string) interface{} {
+	sc.m.RLock()
+	defer sc.m.RUnlock()
+	sc.nget++
+	if sc.cache == nil {
+		return nil
+	}
+
+	v := sc.cache.Get(key)
+	if v != nil {
+		log.Println("[TourCache] hit")
+		sc.nhit++
+	}
+
+	return v
+}
+
+
+func (sc *safeCache) stat() *Stat {
+	sc.m.RLock()
+	defer sc.m.RUnlock()
+	return &Stat{
+		NHit: sc.nhit,
+		NGet: sc.nget,
+	}
+}
+
+type Stat struct {
+	NHit, NGet int
+}
+```
+
+- 并发安全的 cache 实现很简单，构造函数接收一个实现了 Cache 接口的淘汰算法实现；
+- nget, nhit 记录缓存获取次数和命中次数，并定义 Stat 类型和 stat 方法，方便查看统计数据；
+- 在前面的实现中，保证 value 是 nil 的值不会缓存，因此可以通过 value 是否为 nil 来判断是否命中缓存，而不是使用另外一个返回值；
+- 在 `sc.cache == nil` 时，没有创建一个默认的 Cache 实现是避免循环引用，因为前面实现的淘汰算法构造函数都返回了 Cache 接口类型，引用了 github.com/go-programming-tour-book/cache 包；这个问题可以不解决，因为 safeCache 是未导出的，在使用它的地方，我们可以确保其中的 cache 字段一定非 nil。
+
+## 5.3.2 缓存库主体结构 TourCache
+
+有了并发读写安全的 safeCache，接下来提供一个给客户端使用的接口。一般来说，缓存的流程如下：
+
+![img](https://golang2.eddycjy.com/images/ch5/flow.png)
+
+从上图可以看出，缓存只对外提供 Get 接口（其他的都供内部使用）。命中缓存，直接返回缓存中的数据；在缓存未命中时，从 DB 中获取数据（这里的 DB 泛指一切数据源），写入缓存，并返回数据。
+
+### 5.3.2.1 Getter 接口
+
+为了更方便通用化从数据库获取数据（因为可能不同的来源），我们在 cache 根目录创建一个 tour_cache.go 文件，定义一个接口 Getter：
+
+```go
+type Getter interface {
+	Get(key string) interface{}
+}
+```
+
+数据源只要实现该接口，也就是提供 `Get(key string) interface{}` 方法就可以被缓存使用。
+
+为了方便使用，学习 Go 中的一个通用设计思路，为该接口提供一个默认的实现：
+
+```go
+type GetFunc func(key string) interface{}
+
+func (f GetFunc) Get(key string) interface{} {
+	return f(key)
+}
+```
+
+这样任意一个函数，只要签名和 `Get(key string) interface{}` 一致，通过转为 GetFunc 类型，就实现了 Getter 接口。
+
+> 记得 net/http 包中的 Handler 接口和 HandleFunc 类型吗？
+
+### 5.3.2.2 TourCache
+
+在 tour_cache.go 中定义我们对外唯一的缓存功能的结构：
+
+```go
+type TourCache struct {
+	mainCache *safeCache
+	getter    Getter
+}
+
+func NewTourCache(getter Getter, cache Cache) *TourCache {
+	return &TourCache{
+		mainCache: newSafeCache(cache),
+		getter:    getter,
+	}
+}
+
+func (t *TourCache) Get(key string) interface{} {
+	val := t.mainCache.get(key)
+	if val != nil {
+		return val
+	}
+
+	if t.getter != nil {
+		val = t.getter.Get(key)
+		if val == nil {
+			return nil
+		}
+		t.mainCache.set(key, val)
+		return val
+	}
+
+	return nil
+}
+```
+
+- TourCache 结构体包含两个字段，mainCache 即是并发安全的缓存实现；getter 是回调，用于缓存未命中时从数据源获取数据；
+- Get 方法：先从缓存获取数据，如果不存在再调用回调函数获取数据，并将数据写入缓存，最后返回获取的数据；
+
+为了方便统计，在 safeCache 结构中，我们定义了 nget 和 nhit，用来记录缓存获取次数和命中次数。我们为 TourCache 提供统计方法：
+
+```go
+func (t *TourCache) Stat() *Stat {
+	return t.mainCache.stat()
+}
+```
+
+## 5.3.3 测试
+
+至此我们实现了一个并发安全的缓存库。最后通过一个测试用例验证我们的缓存库，同时看看如何使用该缓存库。
+
+在项目根目录新增一个 tour_cache_test.go 测试文件，增加单元测试。
+
+```go
+func TestTourCacheGet(t *testing.T) {
+	db := map[string]string{
+		"key1": "val1",
+		"key2": "val2",
+		"key3": "val3",
+		"key4": "val4",
+	}
+	getter := cache.GetFunc(func(key string) interface{} {
+		log.Println("[From DB] find key", key)
+
+		if val, ok := db[key]; ok {
+			return val
+		}
+		return nil
+	})
+	tourCache := cache.NewTourCache(getter, lru.New(0, nil))
+
+	is := is.New(t)
+
+	var wg sync.WaitGroup
+
+	for k, v := range db {
+		wg.Add(1)
+		go func(k, v string) {
+			defer wg.Done()
+			is.Equal(tourCache.Get(k), v)
+
+			is.Equal(tourCache.Get(k), v)
+		}(k, v)
+	}
+	wg.Wait()
+
+	is.Equal(tourCache.Get("unknown"), nil)
+	is.Equal(tourCache.Get("unknown"), nil)
+
+	is.Equal(tourCache.Stat().NGet, 10)
+	is.Equal(tourCache.Stat().NHit, 4)
+}
+```
+
+- 用一个 map 模拟耗时的数据库；
+- 回调函数简单的从 map 中获取数据，并记录日志；
+- 通过 lru 算法构造一个 TourCache 实例；
+- 并发的从缓存获取数据：在一个 goroutine 中，对同一个 key 获取两次，尽可能保证有命中缓存的情况；
+- 通过一个不存在的 key 来验证这种情况是否会异常；
+- 最后验证获取次数和命中次数；
+
+测试结果如下：
+
+```bash
+$ go test -run TestTourCacheGet
+2020/03/21 10:56:42 [From DB] find key key2
+2020/03/21 10:56:42 [TourCache] hit
+2020/03/21 10:56:42 [From DB] find key key4
+2020/03/21 10:56:42 [TourCache] hit
+2020/03/21 10:56:42 [From DB] find key key3
+2020/03/21 10:56:42 [TourCache] hit
+2020/03/21 10:56:42 [From DB] find key key1
+2020/03/21 10:56:42 [TourCache] hit
+2020/03/21 10:56:42 [From DB] find key unknown
+2020/03/21 10:56:42 [From DB] find key unknown
+PASS
+ok  	github.com/polaris1119/cache	0.173s
+```
+
+可以很清晰地看到，缓存为空时，调用了回调函数，获取数据，第二次访问时，则直接从缓存中读取。
+
