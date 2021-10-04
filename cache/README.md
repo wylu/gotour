@@ -974,3 +974,207 @@ ok  	github.com/polaris1119/cache	0.173s
 
 可以很清晰地看到，缓存为空时，调用了回调函数，获取数据，第二次访问时，则直接从缓存中读取。
 
+# 5.4 缓存的性能和优化思路
+
+前面我们实现的并发安全的进程内缓存性能如何呢？一般地，Go 语言中，对性能的判定通过标准库提供的基准测试来实现。
+
+## 5.4.1 基准测试
+
+因为需要同时测试 Set 和 Get，因此为我们前面实现的缓存增加一个导出的 Set 方法：
+
+```go
+func (t *TourCache) Set(key string, val interface{}) {
+	if val == nil {
+		return
+	}
+	t.mainCache.set(key, val)
+}
+```
+
+对于基准测试，我们在 BigCache 这个库的作者的基准测试基础上，增加 TourCache 的测试，并加上 SetGet 并行测试。可以通过如下命令获取我们的 fork 的测试代码，并执行测试：
+
+```bash
+$ git clone https://github.com/polaris1119/bigcache-bench
+$ cd bigcache-bench
+$ go test -bench=. -benchmem -benchtime=4s ./... -timeout 30m
+```
+
+看看测试的结果。
+
+```bash
+goos: linux
+goarch: amd64
+pkg: github.com/allegro/bigcache-bench
+BenchmarkMapSet-4                        	 7800157	       696 ns/op	     231 B/op	       3 allocs/op
+BenchmarkTourCacheSet-4                  	 3901720	      1324 ns/op	     374 B/op	       6 allocs/op
+BenchmarkConcurrentMapSet-4              	 2852230	      1539 ns/op	     312 B/op	       8 allocs/op
+BenchmarkFreeCacheSet-4                  	 5271206	      1099 ns/op	     331 B/op	       2 allocs/op
+BenchmarkBigCacheSet-4                   	 5646502	       870 ns/op	     303 B/op	       2 allocs/op
+BenchmarkMapGet-4                        	11949051	       443 ns/op	      23 B/op	       1 allocs/op
+BenchmarkTourCacheGet-4                  	 8796339	       519 ns/op	      23 B/op	       1 allocs/op
+BenchmarkConcurrentMapGet-4              	 8453431	       589 ns/op	      24 B/op	       2 allocs/op
+BenchmarkFreeCacheGet-4                  	 5766910	      1020 ns/op	     136 B/op	       3 allocs/op
+BenchmarkBigCacheGet-4                   	 6702626	       724 ns/op	     152 B/op	       3 allocs/op
+BenchmarkTourCacheSetParallel-4          	 3135122	      1368 ns/op	     338 B/op	       7 allocs/op
+BenchmarkBigCacheSetParallel-4           	14178873	       393 ns/op	     323 B/op	       3 allocs/op
+BenchmarkFreeCacheSetParallel-4          	13892508	       481 ns/op	     337 B/op	       3 allocs/op
+BenchmarkConcurrentMapSetParallel-4      	12457863	       439 ns/op	     200 B/op	       6 allocs/op
+BenchmarkTourCacheGetParallel-4          	 5936068	       209 ns/op	      24 B/op	       2 allocs/op
+BenchmarkBigCacheGetParallel-4           	 6383874	       240 ns/op	     152 B/op	       4 allocs/op
+BenchmarkFreeCacheGetParallel-4          	 4827747	       282 ns/op	     136 B/op	       3 allocs/op
+BenchmarkConcurrentMapGetParallel-4      	 4005224	       312 ns/op	      24 B/op	       2 allocs/op
+BenchmarkTourCacheSetGetParallel-4       	 1000000	      1648 ns/op	     403 B/op	       9 allocs/op
+BenchmarkBigCacheSetGetParallel-4        	 2551568	       512 ns/op	     337 B/op	       5 allocs/op
+BenchmarkFreeCacheSetGetParallel-4       	 2391876	       539 ns/op	     367 B/op	       5 allocs/op
+BenchmarkConcurrentMapSetGetParallel-4   	 2123792	       490 ns/op	     224 B/op	       8 allocs/op
+```
+
+- 这个基准测试对比了 Map、ConcurrentMap（sync.Map）、BigCache、FreeCache 和 TourCache（LRU）。
+
+从结果看，不管是否是并行测试，Get 方法的性能差距不大。然而，Set 方法的性能差距比较大。看看并行下的 Set 性能对比（具体数据，你的运行结果应该不一样）：
+
+```bash
+BenchmarkTourCacheSetParallel-4          	 3135122	      1368 ns/op	     338 B/op	       7 allocs/op
+BenchmarkBigCacheSetParallel-4           	14178873	       393 ns/op	     323 B/op	       3 allocs/op
+BenchmarkFreeCacheSetParallel-4          	13892508	       481 ns/op	     337 B/op	       3 allocs/op
+BenchmarkConcurrentMapSetParallel-4      	12457863	       439 ns/op	     200 B/op	       6 allocs/op
+```
+
+TourCache 的性能只有 BigCache 和 FreeCache 的 1/4 左右。
+
+**Benchstat 工具简单介绍**
+
+有些读者可能要问，怎么认为这个基准测试是可靠的。比如再次运行，结果可能不一样。这里推荐一个 Go Team 的工具：benchstat。
+
+执行如下命令安装 benchstat：
+
+```shell
+go get -u golang.org/x/perf/cmd/benchstat
+```
+
+benchstat 这个工具计算并比较有关基准的统计信息。使用方式：
+
+```bash
+benchstat [options] old.txt [new.txt] [more.txt ...]
+```
+
+针对上面 SetParallel 系列函数，我们运行 10 次基准测试，并将结果保存到 old.txt 文件中：
+
+```bash
+go test -bench=SetParallel -benchmem -count=10 ./... | tee old.txt
+```
+
+然后使用 benchstat 工具对基准测试的结果进行统计。
+
+```bash
+benchstat old.txt
+```
+
+结果如下：
+
+```bash
+name                           time/op
+TourCacheSetGetParallel-4      1.52 µ s ± 3%
+BigCacheSetGetParallel-4        517ns ± 8%
+FreeCacheSetGetParallel-4       644ns ± 4%
+ConcurrentMapSetGetParallel-4   469ns ± 4%
+
+name                           alloc/op
+TourCacheSetGetParallel-4        367B ± 1%
+BigCacheSetGetParallel-4         336B ± 0%
+FreeCacheSetGetParallel-4        363B ± 1%
+ConcurrentMapSetGetParallel-4    224B ± 0%
+
+name                           allocs/op
+TourCacheSetGetParallel-4        9.00 ± 0%
+BigCacheSetGetParallel-4         5.00 ± 0%
+FreeCacheSetGetParallel-4        5.00 ± 0%
+ConcurrentMapSetGetParallel-4    8.00 ± 0%
+```
+
+我们关注最上面的一组。TourCache 的 time/op 在 1520ns 左右，上下浮动 3%；BigCache 的 time/op 在 517ns 左右，上下浮动 8%。总体上，TourCache 的性能是 BigCache 的 1/3 左右。
+
+> 注意，ConcurrentMap 只是简单的存取，并没有实现 LRU。
+
+如果在我们的库中将普通 map 换成 sync.Map 会怎么样？
+
+sync.Map 类似于 Go 的 `map[interface{}]interface{}`，但是可以安全地被多个 goroutine 并发使用，而无需额外的锁。大部分情况下，我们都应该只使用普通的 map，需要锁时加上锁。sync.Map 对以下两种场景进行了优化：
+
+- 当给定 key 的条目仅被写入一次却被读取多次时，例如在仅增长的高速缓存中；
+- 当多个 goroutine 读取，写入和覆盖不相交的键集合的条目时；
+
+> 读者可以自行使用 sync.Map 替换 TourCache 中的 map 试试。
+
+回过头我们看看基准测试的实现，主要关注 BenchmarkTourCacheSetParallel。
+
+```go
+func BenchmarkTourCacheSetParallel(b *testing.B) {
+	cache := cache.NewTourCache(nil, lru.New(b.N*100, nil))
+	rand.Seed(time.Now().Unix())
+
+	b.RunParallel(func(pb *testing.PB) {
+		id := rand.Intn(1000)
+		counter := 0
+		for pb.Next() {
+			cache.Set(parallelKey(id, counter), value())
+			counter = counter + 1
+		}
+	})
+}
+
+func key(i int) string {
+	return fmt.Sprintf("key-%010d", i)
+}
+
+func value() []byte {
+	return make([]byte, 100)
+}
+
+func parallelKey(threadID int, counter int) string {
+	return fmt.Sprintf("key-%04d-%06d", threadID, counter)
+}
+```
+
+注意这里的 RunParallel。通过 `RunParallel` 方法以并行的方式执行给定的基准测试。RunParallel 会创建出多个 goroutine，并将 b.N 分配给这些 goroutine 执行，其中 goroutine 数量的默认值为 GOMAXPROCS。用户如果想要增加非 CPU 受限（non-CPU-bound）基准测试的并行性，那么可以在 RunParallel 之前调用 SetParallelism（如 SetParallelism(2)，则 goroutine 数量为 2*GOMAXPROCS）。RunParallel 通常会与 -cpu 标志一同使用。
+
+RunParallel 的参数是一个回调函数，它将在每个 goroutine 中执行，这个函数需要设置所有 goroutine 本地的状态，并迭代直到 `pb.Next` 返回 false 值为止。因为 `StartTimer`、`StopTime` 和 `ResetTimer` 这三个方法都带有全局作用，所以 回调函数不应该调用这些方法； 除此之外，回调函数也不应该调用 Run 方法。
+
+## 5.4.2 高性能是如何做到的
+
+从上面的基准测试可以看出，BigCache 和 FreeCache 的整体性能不错。
+
+> 除此之外，还有另外一个库，它基于 BigCache，但做了一些改变，它就是 FastCache。有兴趣的读者可以自行了解。
+
+本节我们来简单分析下它们是怎么做到高性能的。
+
+### 5.4.2.1 加速并发访问
+
+我们实现的 TourCache 性能不佳的主要原因在于使用了 sync.RWMutex 进行并发访问安全保护。对于非高并发场景下，锁争用少，性能好坏不明显。当在高并发场景下时，锁争用会很频繁，导致性能明显下降。
+
+知道了性能不佳的原因，那怎么优化呢？为了并发安全，sync.RWMutex 似乎必不可少，那只能尽可能减少锁争用，让某些情况下无锁操作，或者让锁的时间尽可能短。
+
+关于无锁操作，Go 源码提供了一些思路：
+
+- Go 的内存分配器，为每个工作线程绑定一个 cache，用于无锁 object 分配；当 cache 中没有可用内存时，才会加锁从 central 中获取；
+- Go 的调度器我们知道是 GMP 模型。对于要调度的任务，Go 除了有一个全局的任务队列，还为每一个 P 绑定了一个本地任务队列。这样，大部分时候，P 都可以无锁的获取本地任务队列中的任务来进行无锁操作；
+
+以上两种做法可以抽象为将一堆数据块分为几组，组内的访问是无锁的，只有从全局数据块中为该组增加数据块时才需要锁。这样极大的降低了锁带来的开销。
+
+BigCache 和 FreeCache 高性能的关键就是使用了类似的无锁技巧：将数据分片（分组），每个分片内需要锁。这跟上面的技巧是不一样的，但我认为思路是类似的。这样锁争用会得到较大的改善。
+
+### 5.4.2.2 避免 GC
+
+大部分时候，我们不需要刻意考虑该问题，因为现在的 Go GC 挺优秀的。然而有些场景，GC 可能会成为瓶颈，这时候需要刻意使用一些技巧来避免 GC 开销。
+
+一般来说，常用的技巧有：
+
+- 对象池。重用对象，避免频繁分配内存；
+- 让内存分配在栈中，避免逃逸到堆；
+
+对于 map 而言，GC 扫描时，是把 map 当做一个对象还是要扫描 map 里面一个个键值对？Go1.5 之后，如果 map 的键值都是基本类型，GC 不会扫描里面的键值对，这就避免了不必要的 GC 开销。这就是 BigCache 采用的优化方案。
+
+而 FreeCache 采用的是另一种优化方案：减少指针数量。FreeCache 做到无论其中存储了多少记录，都只有 512 个指针。通过 key 的哈希值将数据集分割为 256 个段。每个段只有两个指针，一个是存储键和值的环形缓冲区，另一个是用于查找条目的索引切片。每个段都有自己的锁，因此它支持高并发访问。
+
+## 5.4.3 小结
+
+要做到高性能，必须减少锁导致的开销。本节提到的优化方案，在相应的库中是怎么实现的呢？下节我们学习下 BigCache 这个库是怎么做的。
